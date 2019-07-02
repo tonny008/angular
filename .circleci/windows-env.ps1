@@ -18,7 +18,13 @@ choco install visualstudio2019buildtools --version 16.1.2.0 --no-progress --pack
 new-item -path $profile -itemtype file -force
 # Paths for nodejs, npm, yarn, and msys2. Use single quotes to prevent interpolation.
 # Add before the original path to use msys2 instead of the installed gitbash.
-Add-Content $profile '$Env:path = "${Env:ProgramFiles}\nodejs\;C:\Users\circleci\AppData\Roaming\npm\;${Env:ProgramFiles(x86)}\Yarn\bin\;C:\tools\msys64\usr\bin\;" + $Env:path'
+Add-Content $profile '$Env:path = "${Env:ProgramFiles}\nodejs\;C:\Users\circleci\AppData\Roaming\npm\;${Env:ProgramFiles(x86)}\Yarn\bin\;C:\Users\circleci\AppData\Local\Yarn\bin\;C:\tools\msys64\usr\bin\;" + $Env:path'
 # Environment variables for Bazel
 Add-Content $profile '$Env:BAZEL_SH = "C:\tools\msys64\usr\bin\bash.exe"'
 Add-Content $profile '$Env:BAZEL_VC = "${Env:ProgramFiles(x86)}\Microsoft Visual Studio\2019\BuildTools\VC\"'
+
+# Remove the CircleCI checkout SSH override, because it breaks cloning repositories through bazel.
+# See https://circleci.com/gh/angular/angular/401454 for an example.
+# TODO: is this really needed? Maybe there's a better way.
+git config --global --unset url.ssh://git@github.com.insteadOf
+
