@@ -7,7 +7,6 @@
  */
 import * as ts from 'typescript';
 import {AbsoluteFsPath} from '../../../src/ngtsc/file_system';
-import {resolveFileWithPostfixes} from '../utils';
 import {DependencyHostBase} from './dependency_host';
 import {ResolvedDeepImport, ResolvedRelativeModule} from './module_resolver';
 
@@ -27,14 +26,10 @@ export class EsmDependencyHost extends DependencyHostBase {
    * @param alreadySeen A set that is used to track internal dependencies to prevent getting stuck
    * in a circular dependency loop.
    */
-  protected recursivelyFindDependencies(
+  protected recursivelyCollectDependencies(
       file: AbsoluteFsPath, dependencies: Set<AbsoluteFsPath>, missing: Set<string>,
       deepImports: Set<string>, alreadySeen: Set<AbsoluteFsPath>): void {
-    const resolvedFile = resolveFileWithPostfixes(this.fs, file, ['', '.js', '/index.js']);
-    if (resolvedFile === null) {
-      return;
-    }
-    const fromContents = this.fs.readFile(resolvedFile);
+    const fromContents = this.fs.readFile(file);
 
     if (!hasImportOrReexportStatements(fromContents)) {
       // Avoid parsing the source file as there are no imports.
@@ -42,35 +37,48 @@ export class EsmDependencyHost extends DependencyHostBase {
     }
 
     // Parse the source into a TypeScript AST and then walk it looking for imports and re-exports.
-    const sf = ts.createSourceFile(
-        resolvedFile, fromContents, ts.ScriptTarget.ES2015, false, ts.ScriptKind.JS);
+    const sf =
+        ts.createSourceFile(file, fromContents, ts.ScriptTarget.ES2015, false, ts.ScriptKind.JS);
     sf.statements
         // filter out statements that are not imports or reexports
         .filter(isStringImportOrReexport)
         // Grab the id of the module that is being imported
         .map(stmt => stmt.moduleSpecifier.text)
-        // Resolve this module id into an absolute path
         .forEach(importPath => {
-          const resolvedModule = this.moduleResolver.resolveModuleImport(importPath, resolvedFile);
-          if (resolvedModule) {
-            if (resolvedModule instanceof ResolvedRelativeModule) {
-              const internalDependency = resolvedModule.modulePath;
-              if (!alreadySeen.has(internalDependency)) {
-                alreadySeen.add(internalDependency);
-                this.recursivelyFindDependencies(
-                    internalDependency, dependencies, missing, deepImports, alreadySeen);
-              }
-            } else {
-              if (resolvedModule instanceof ResolvedDeepImport) {
-                deepImports.add(resolvedModule.importPath);
-              } else {
-                dependencies.add(resolvedModule.entryPointPath);
-              }
-            }
-          } else {
+          const resolved =
+              this.processImport(importPath, file, dependencies, missing, deepImports, alreadySeen);
+          if (!resolved) {
             missing.add(importPath);
           }
         });
+  }
+
+  /**
+   * Resolve the given `importPath` from `file` and add it to the appropriate set.
+   *
+   * @returns `true` if the import was resolved (to an entry-point, a local import, or a
+   * deep-import).
+   */
+  protected processImport(
+      importPath: string, file: AbsoluteFsPath, dependencies: Set<AbsoluteFsPath>,
+      missing: Set<string>, deepImports: Set<string>, alreadySeen: Set<AbsoluteFsPath>): boolean {
+    const resolvedModule = this.moduleResolver.resolveModuleImport(importPath, file);
+    if (resolvedModule === null) {
+      return false;
+    }
+    if (resolvedModule instanceof ResolvedRelativeModule) {
+      const internalDependency = resolvedModule.modulePath;
+      if (!alreadySeen.has(internalDependency)) {
+        alreadySeen.add(internalDependency);
+        this.recursivelyCollectDependencies(
+            internalDependency, dependencies, missing, deepImports, alreadySeen);
+      }
+    } else if (resolvedModule instanceof ResolvedDeepImport) {
+      deepImports.add(resolvedModule.importPath);
+    } else {
+      dependencies.add(resolvedModule.entryPointPath);
+    }
+    return true;
   }
 }
 

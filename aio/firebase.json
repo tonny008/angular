@@ -1,7 +1,4 @@
 {
-  "database": {
-    "rules": "database.rules.json"
-  },
   "hosting": {
     "public": "dist",
     "cleanUrls": true,
@@ -26,11 +23,18 @@
       {"type": 301, "source": "/guide/service-worker-comm", "destination": "/guide/service-worker-communications"},
       {"type": 301, "source": "/guide/service-worker-configref", "destination": "/guide/service-worker-config"},
       {"type": 301, "source": "/guide/webpack", "destination": "https://v5.angular.io/guide/webpack"},
+      {"type": 301, "source": "/guide/setup", "destination": "/guide/setup-local"},
       {"type": 301, "source": "/guide/setup-systemjs-anatomy", "destination": "/guide/file-structure"},
       {"type": 301, "source": "/guide/change-log", "destination": "https://github.com/angular/angular/blob/master/CHANGELOG.md"},
       {"type": 301, "source": "/guide/quickstart", "destination": "/start"},
       {"type": 301, "source": "/getting-started", "destination": "/start"},
       {"type": 301, "source": "/getting-started/:rest*", "destination": "/start/:rest*"},
+
+      // Renaming of Getting Started topics
+      {"type": 301, "source": "/start/data", "destination": "/start/start-data"},
+      {"type": 301, "source": "/start/deployment", "destination": "/start/start-deployment"},
+      {"type": 301, "source": "/start/forms", "destination": "/start/start-forms"},
+      {"type": 301, "source": "/start/routing", "destination": "/start/start-routing"},
 
       // some top level guide pages on old site were moved below the guide folder
       {"type": 301, "source": "/styleguide", "destination": "/guide/styleguide"},
@@ -58,8 +62,7 @@
       {"type": 301, "source": "/**/api/common/NgModel", "destination": "/api/forms/NgModel"},
 
       // `@angular/http` package was removed, and new `HttpClient` APIs are available under `@angular/common/http` package
-      {"type": 301, "source": "/api/http/:rest*", "destination": "/guide/deprecations#http"},
-      {"type": 301, "source": "/api/http", "destination": "/guide/deprecations#http"},
+      {"type": 301, "source": "/api/http/**", "destination": "/guide/deprecations#http"},
 
       // Animations moves, renames and removals
       {"type": 301, "source": "/api/animate/:rest*", "destination": "/api/animations/:rest*"},

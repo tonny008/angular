@@ -12,8 +12,8 @@ import * as shx from 'shelljs';
 import {Configuration, Linter} from 'tslint';
 
 describe('Google3 Renderer to Renderer2 TSLint rule', () => {
-  const rulesDirectory = dirname(
-      require.resolve('../../migrations/renderer-to-renderer2/google3/rendererToRenderer2Rule'));
+  const rulesDirectory =
+      dirname(require.resolve('../../migrations/google3/rendererToRenderer2Rule'));
 
   let tmpDir: string;
 
@@ -34,7 +34,7 @@ describe('Google3 Renderer to Renderer2 TSLint rule', () => {
         paths: {
           '@angular/core': ['angular.d.ts'],
         }
-      }
+      },
     }));
   });
 
@@ -43,8 +43,7 @@ describe('Google3 Renderer to Renderer2 TSLint rule', () => {
   function runTSLint(fix: boolean) {
     const program = Linter.createProgram(join(tmpDir, 'tsconfig.json'));
     const linter = new Linter({fix, rulesDirectory: [rulesDirectory]}, program);
-    const config = Configuration.parseConfigFile(
-        {rules: {'renderer-to-renderer2': true}, linterOptions: {typeCheck: true}});
+    const config = Configuration.parseConfigFile({rules: {'renderer-to-renderer2': true}});
 
     program.getRootFileNames().forEach(fileName => {
       linter.lint(fileName, program.getSourceFile(fileName) !.getFullText(), config);

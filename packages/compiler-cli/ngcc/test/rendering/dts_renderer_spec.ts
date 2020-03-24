@@ -9,6 +9,7 @@ import MagicString from 'magic-string';
 import * as ts from 'typescript';
 import {absoluteFrom, getFileSystem} from '../../../src/ngtsc/file_system';
 import {TestFile, runInEachFileSystem} from '../../../src/ngtsc/file_system/testing';
+import {Reexport} from '../../../src/ngtsc/imports';
 import {loadTestFiles} from '../../../test/helpers';
 import {Import, ImportManager} from '../../../src/ngtsc/translator';
 import {DecorationAnalyzer} from '../../src/analysis/decoration_analyzer';
@@ -29,11 +30,17 @@ class TestRenderingFormatter implements RenderingFormatter {
   addExports(output: MagicString, baseEntryPointPath: string, exports: ExportInfo[]) {
     output.prepend('\n// ADD EXPORTS\n');
   }
+  addDirectExports(output: MagicString, exports: Reexport[]) {
+    output.prepend('\n// ADD DIRECT EXPORTS\n');
+  }
   addConstants(output: MagicString, constants: string, file: ts.SourceFile): void {
     output.prepend('\n// ADD CONSTANTS\n');
   }
   addDefinitions(output: MagicString, compiledClass: CompiledClass, definitions: string) {
     output.prepend('\n// ADD DEFINITIONS\n');
+  }
+  addAdjacentStatements(output: MagicString, compiledClass: CompiledClass, statements: string) {
+    output.prepend('\n// ADD ADJACENT STATEMENTS\n');
   }
   removeDecorators(output: MagicString, decoratorsToRemove: RedundantDecoratorMap) {
     output.prepend('\n// REMOVE DECORATORS\n');
@@ -46,6 +53,7 @@ class TestRenderingFormatter implements RenderingFormatter {
       importManager: ImportManager): void {
     output.prepend('\n// ADD MODUlE WITH PROVIDERS PARAMS\n');
   }
+  printStatement(): string { return 'IGNORED'; }
 }
 
 function createTestRenderer(
@@ -61,25 +69,26 @@ function createTestRenderer(
   const fs = getFileSystem();
   const isCore = packageName === '@angular/core';
   const bundle = makeTestEntryPointBundle(
-      'test-package', 'es2015', 'esm2015', isCore, getRootFiles(files),
-      dtsFiles && getRootFiles(dtsFiles));
-  const typeChecker = bundle.src.program.getTypeChecker();
-  const host = new Esm2015ReflectionHost(logger, isCore, typeChecker, bundle.dts);
+      'test-package', 'esm2015', isCore, getRootFiles(files), dtsFiles && getRootFiles(dtsFiles));
+  const host = new Esm2015ReflectionHost(logger, isCore, bundle.src, bundle.dts);
   const referencesRegistry = new NgccReferencesRegistry(host);
   const decorationAnalyses =
       new DecorationAnalyzer(fs, bundle, host, referencesRegistry).analyzeProgram();
   const moduleWithProvidersAnalyses =
-      new ModuleWithProvidersAnalyzer(host, referencesRegistry).analyzeProgram(bundle.src.program);
+      new ModuleWithProvidersAnalyzer(host, referencesRegistry, true)
+          .analyzeProgram(bundle.src.program);
   const privateDeclarationsAnalyses =
       new PrivateDeclarationsAnalyzer(host, referencesRegistry).analyzeProgram(bundle.src.program);
   const testFormatter = new TestRenderingFormatter();
   spyOn(testFormatter, 'addExports').and.callThrough();
   spyOn(testFormatter, 'addImports').and.callThrough();
   spyOn(testFormatter, 'addDefinitions').and.callThrough();
+  spyOn(testFormatter, 'addAdjacentStatements').and.callThrough();
   spyOn(testFormatter, 'addConstants').and.callThrough();
   spyOn(testFormatter, 'removeDecorators').and.callThrough();
   spyOn(testFormatter, 'rewriteSwitchableDeclarations').and.callThrough();
   spyOn(testFormatter, 'addModuleWithProvidersParams').and.callThrough();
+  spyOn(testFormatter, 'printStatement').and.callThrough();
 
   const renderer = new DtsRenderer(testFormatter, fs, logger, host, bundle);
 
@@ -105,7 +114,7 @@ runInEachFileSystem(() => {
             `import { Directive } from '@angular/core';\nexport class A {\n    foo(x) {\n        return x;\n    }\n}\nA.decorators = [\n    { type: Directive, args: [{ selector: '[a]' }] }\n];\n`
       };
       INPUT_DTS_PROGRAM = {
-        name: _('/typings/file.d.ts'),
+        name: _('/node_modules/test-package/typings/file.d.ts'),
         contents: `export declare class A {\nfoo(x: number): number;\n}\n`
       };
     });
@@ -117,10 +126,11 @@ runInEachFileSystem(() => {
       const result = renderer.renderProgram(
           decorationAnalyses, privateDeclarationsAnalyses, moduleWithProvidersAnalyses);
 
-      const typingsFile = result.find(f => f.path === _('/typings/file.d.ts')) !;
+      const typingsFile =
+          result.find(f => f.path === _('/node_modules/test-package/typings/file.d.ts')) !;
       expect(typingsFile.contents)
           .toContain(
-              'foo(x: number): number;\n    static ngDirectiveDef: ɵngcc0.ɵɵDirectiveDefWithMeta');
+              'foo(x: number): number;\n    static ɵfac: ɵngcc0.ɵɵFactoryDef<A>;\n    static ɵdir: ɵngcc0.ɵɵDirectiveDefWithMeta');
     });
 
     it('should render imports into typings files', () => {
@@ -130,7 +140,8 @@ runInEachFileSystem(() => {
       const result = renderer.renderProgram(
           decorationAnalyses, privateDeclarationsAnalyses, moduleWithProvidersAnalyses);
 
-      const typingsFile = result.find(f => f.path === _('/typings/file.d.ts')) !;
+      const typingsFile =
+          result.find(f => f.path === _('/node_modules/test-package/typings/file.d.ts')) !;
       expect(typingsFile.contents).toContain(`\n// ADD IMPORTS\n`);
     });
 
@@ -149,7 +160,8 @@ runInEachFileSystem(() => {
       const result = renderer.renderProgram(
           decorationAnalyses, privateDeclarationsAnalyses, moduleWithProvidersAnalyses);
 
-      const typingsFile = result.find(f => f.path === _('/typings/file.d.ts')) !;
+      const typingsFile =
+          result.find(f => f.path === _('/node_modules/test-package/typings/file.d.ts')) !;
       expect(typingsFile.contents).toContain(`\n// ADD EXPORTS\n`);
     });
 
@@ -161,7 +173,8 @@ runInEachFileSystem(() => {
       const result = renderer.renderProgram(
           decorationAnalyses, privateDeclarationsAnalyses, moduleWithProvidersAnalyses);
 
-      const typingsFile = result.find(f => f.path === _('/typings/file.d.ts')) !;
+      const typingsFile =
+          result.find(f => f.path === _('/node_modules/test-package/typings/file.d.ts')) !;
       expect(typingsFile.contents).toContain(`\n// ADD MODUlE WITH PROVIDERS PARAMS\n`);
     });
   });

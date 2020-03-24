@@ -30,56 +30,57 @@
       &:hover {
         color: $accentblue;
       }
-
     }
   }
 
-  button.toc-heading,
-  button.toc-more-items {
-    cursor: pointer;
-    display: inline-block;
-    background: 0;
-    background-color: transparent;
-    border: none;
-    box-shadow: none;
-    padding: 0;
-    text-align: start;
+  button {
+    &.toc-heading,
+    &.toc-more-items {
+      cursor: pointer;
+      display: inline-block;
+      background: 0;
+      background-color: transparent;
+      border: none;
+      box-shadow: none;
+      padding: 0;
+      text-align: start;
 
-    &.embedded:focus {
-      outline: none;
-      background: $lightgray;
+      &.embedded:focus {
+        outline: none;
+        background: $lightgray;
+      }
     }
-  }
 
-  button.toc-heading {
-    mat-icon.rotating-icon {
-      height: 18px;
-      width: 18px;
+    &.toc-heading {
+      mat-icon.rotating-icon {
+        height: 18px;
+        width: 18px;
+        position: relative;
+        left: -4px;
+        top: 5px;
+      }
+
+      &:hover:not(.embedded) {
+        color: $accentblue;
+      }
+    }
+
+    &.toc-more-items {
+      color: $mediumgray;
+      top: 10px;
       position: relative;
-      left: -4px;
-      top: 5px;
-    }
 
-    &:hover:not(.embedded) {
-      color: $accentblue;
-    }
-  }
+      &:hover {
+        color: $accentblue;
+      }
 
-  button.toc-more-items {
-    color: $mediumgray;
-    top: 10px;
-    position: relative;
+      &::after {
+        content: 'expand_less';
+      }
 
-    &:hover {
-      color: $accentblue;
-    }
-
-    &::after {
-      content: 'expand_less';
-    }
-
-    &.collapsed::after {
-      content: 'more_horiz';
+      &.collapsed::after {
+        content: 'more_horiz';
+      }
     }
   }
 

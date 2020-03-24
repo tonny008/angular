@@ -39,6 +39,13 @@ describe('Zone.js npm_package', () => {
     describe('typescript support', () => {
       it('should have an zone.js.d.ts file',
          () => { expect(shx.cat('zone.js.d.ts')).toContain('declare const'); });
+
+      it('should have an zone.api.extensions.ts file',
+         () => { expect(shx.cat('zone.api.extensions.ts')).toContain('EventTarget'); });
+
+      it('should have an zone.configurations.api.ts file', () => {
+        expect(shx.cat('zone.configurations.api.ts')).toContain('ZoneGlobalConfigurations');
+      });
     });
 
     describe('closure', () => {
@@ -46,14 +53,26 @@ describe('Zone.js npm_package', () => {
          () => { expect(shx.cat('zone_externs.js')).toContain('Externs for zone.js'); });
     });
 
+    describe('rxjs patch', () => {
+      it('should not contain rxjs source', () => {
+        expect(shx.cat('zone-patch-rxjs.js'))
+            .not.toContain('_enable_super_gross_mode_that_will_cause_bad_things');
+      });
+    });
+
     describe('es5', () => {
       it('zone.js(es5) should not contain es6 spread code',
          () => { expect(shx.cat('zone.js')).not.toContain('let value of values'); });
+
+      it('zone.js(es5) should not contain source map comment',
+         () => { expect(shx.cat('zone.js')).not.toContain('sourceMappingURL'); });
     });
 
     describe('es2015', () => {
       it('zone-evergreen.js(es2015) should contain es6 code',
          () => { expect(shx.cat('zone-evergreen.js')).toContain('let value of values'); });
+      it('zone.js(es5) should not contain source map comment',
+         () => { expect(shx.cat('zone-evergreen.js')).not.toContain('sourceMappingURL'); });
     });
 
     describe('dist file list', () => {
@@ -111,6 +130,8 @@ describe('Zone.js npm_package', () => {
           'zone-patch-fetch.min.js',
           'zone-patch-jsonp.js',
           'zone-patch-jsonp.min.js',
+          'zone-patch-message-port.js',
+          'zone-patch-message-port.min.js',
           'zone-patch-promise-test.js',
           'zone-patch-promise-test.min.js',
           'zone-patch-resize-observer.js',
@@ -131,6 +152,8 @@ describe('Zone.js npm_package', () => {
           'zone-testing.min.js',
           'zone.js',
           'zone.js.d.ts',
+          'zone.api.extensions.ts',
+          'zone.configurations.api.ts',
           'zone.min.js',
         ].sort();
         expect(list.length).toBe(expected.length);

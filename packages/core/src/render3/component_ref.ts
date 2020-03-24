@@ -16,7 +16,7 @@ import {ComponentFactoryResolver as viewEngine_ComponentFactoryResolver} from '.
 import {ElementRef as viewEngine_ElementRef} from '../linker/element_ref';
 import {NgModuleRef as viewEngine_NgModuleRef} from '../linker/ng_module_factory';
 import {RendererFactory2} from '../render/api';
-import {Sanitizer} from '../sanitization/security';
+import {Sanitizer} from '../sanitization/sanitizer';
 import {VERSION} from '../version';
 import {NOT_FOUND_CHECK_ONLY_ELEMENT_INJECTOR} from '../view/provider';
 
@@ -24,12 +24,16 @@ import {assertComponentType} from './assert';
 import {LifecycleHooksFeature, createRootComponent, createRootComponentView, createRootContext} from './component';
 import {getComponentDef} from './definition';
 import {NodeInjector} from './di';
-import {addToViewTree, assignTViewNodeToLView, createLView, createTView, elementCreate, locateHostElement, refreshDescendantViews} from './instructions/shared';
+import {assignTViewNodeToLView, createLView, createTView, elementCreate, locateHostElement, renderView} from './instructions/shared';
 import {ComponentDef} from './interfaces/definition';
 import {TContainerNode, TElementContainerNode, TElementNode} from './interfaces/node';
-import {RNode, RendererFactory3, domRendererFactory3, isProceduralRenderer} from './interfaces/renderer';
-import {LView, LViewFlags, TVIEW} from './interfaces/view';
-import {enterView, leaveView, namespaceHTMLInternal} from './state';
+import {RNode, RendererFactory3, domRendererFactory3} from './interfaces/renderer';
+import {LView, LViewFlags, TVIEW, TViewType} from './interfaces/view';
+import {MATH_ML_NAMESPACE, SVG_NAMESPACE} from './namespaces';
+import {writeDirectClass} from './node_manipulation';
+import {extractAttrsAndClassesFromSelector, stringifyCSSSelectorList} from './node_selector_matcher';
+import {enterView, leaveView} from './state';
+import {setUpAttributes} from './util/attrs_utils';
 import {defaultScheduler} from './util/misc_utils';
 import {getTNode} from './util/view_utils';
 import {createElementRef} from './view_engine_compatibility';
@@ -57,6 +61,11 @@ function toRefArray(map: {[key: string]: string}): {propName: string; templateNa
     }
   }
   return array;
+}
+
+function getNamespace(elementName: string): string|null {
+  const name = elementName.toLowerCase();
+  return name === 'svg' ? SVG_NAMESPACE : (name === 'math' ? MATH_ML_NAMESPACE : null);
 }
 
 /**
@@ -113,9 +122,7 @@ export class ComponentFactory<T> extends viewEngine_ComponentFactory<T> {
       private componentDef: ComponentDef<any>, private ngModule?: viewEngine_NgModuleRef<any>) {
     super();
     this.componentType = componentDef.type;
-
-    // default to 'div' in case this component has an attribute selector
-    this.selector = componentDef.selectors[0][0] as string || 'div';
+    this.selector = stringifyCSSSelectorList(componentDef.selectors);
     this.ngContentSelectors =
         componentDef.ngContentSelectors ? componentDef.ngContentSelectors : [];
     this.isBoundToModule = !!ngModule;
@@ -133,12 +140,15 @@ export class ComponentFactory<T> extends viewEngine_ComponentFactory<T> {
         rootViewInjector.get(RendererFactory2, domRendererFactory3) as RendererFactory3;
     const sanitizer = rootViewInjector.get(Sanitizer, null);
 
-    // Ensure that the namespace for the root node is correct,
-    // otherwise the browser might not render out the element properly.
-    namespaceHTMLInternal();
+    const hostRenderer = rendererFactory.createRenderer(null, this.componentDef);
+    // Determine a tag name used for creating host elements when this component is created
+    // dynamically. Default to 'div' if this component did not specify any tag name in its selector.
+    const elementName = this.componentDef.selectors[0][0] as string || 'div';
     const hostRNode = rootSelectorOrNode ?
-        locateHostElement(rendererFactory, rootSelectorOrNode) :
-        elementCreate(this.selector, rendererFactory.createRenderer(null, this.componentDef));
+        locateHostElement(hostRenderer, rootSelectorOrNode, this.componentDef.encapsulation) :
+        elementCreate(
+            elementName, rendererFactory.createRenderer(null, this.componentDef),
+            getNamespace(elementName));
 
     const rootFlags = this.componentDef.onPush ? LViewFlags.Dirty | LViewFlags.IsRoot :
                                                  LViewFlags.CheckAlways | LViewFlags.IsRoot;
@@ -151,33 +161,45 @@ export class ComponentFactory<T> extends viewEngine_ComponentFactory<T> {
         /^#root-ng-internal-isolated-\d+/.test(rootSelectorOrNode);
 
     const rootContext = createRootContext();
-    const renderer = rendererFactory.createRenderer(hostRNode, this.componentDef);
-
-    if (rootSelectorOrNode && hostRNode) {
-      ngDevMode && ngDevMode.rendererSetAttribute++;
-      isProceduralRenderer(renderer) ?
-          renderer.setAttribute(hostRNode, 'ng-version', VERSION.full) :
-          hostRNode.setAttribute('ng-version', VERSION.full);
-    }
 
     // Create the root view. Uses empty TView and ContentTemplate.
+    const rootTView = createTView(TViewType.Root, -1, null, 1, 0, null, null, null, null, null);
     const rootLView = createLView(
-        null, createTView(-1, null, 1, 0, null, null, null, null), rootContext, rootFlags, null,
-        null, rendererFactory, renderer, sanitizer, rootViewInjector);
+        null, rootTView, rootContext, rootFlags, null, null, rendererFactory, hostRenderer,
+        sanitizer, rootViewInjector);
 
     // rootView is the parent when bootstrapping
-    const oldLView = enterView(rootLView, null);
+    // TODO(misko): it looks like we are entering view here but we don't really need to as
+    // `renderView` does that. However as the code is written it is needed because
+    // `createRootComponentView` and `createRootComponent` both read global state. Fixing those
+    // issues would allow us to drop this.
+    enterView(rootLView, null);
 
     let component: T;
     let tElementNode: TElementNode;
 
-    // Will become true if the `try` block executes with no errors.
-    let safeToRunHooks = false;
     try {
       const componentView = createRootComponentView(
-          hostRNode, this.componentDef, rootLView, rendererFactory, renderer);
+          hostRNode, this.componentDef, rootLView, rendererFactory, hostRenderer);
+      if (hostRNode) {
+        if (rootSelectorOrNode) {
+          setUpAttributes(hostRenderer, hostRNode, ['ng-version', VERSION.full]);
+        } else {
+          // If host element is created as a part of this function call (i.e. `rootSelectorOrNode`
+          // is not defined), also apply attributes and classes extracted from component selector.
+          // Extract attributes and classes from the first selector only to match VE behavior.
+          const {attrs, classes} =
+              extractAttrsAndClassesFromSelector(this.componentDef.selectors[0]);
+          if (attrs) {
+            setUpAttributes(hostRenderer, hostRNode, attrs);
+          }
+          if (classes && classes.length > 0) {
+            writeDirectClass(hostRenderer, hostRNode, classes.join(' '));
+          }
+        }
+      }
 
-      tElementNode = getTNode(0, rootLView) as TElementNode;
+      tElementNode = getTNode(rootLView[TVIEW], 0) as TElementNode;
 
       if (projectableNodes) {
         // projectable nodes can be passed as array of arrays or an array of iterables (ngUpgrade
@@ -193,11 +215,9 @@ export class ComponentFactory<T> extends viewEngine_ComponentFactory<T> {
       component = createRootComponent(
           componentView, this.componentDef, rootLView, rootContext, [LifecycleHooksFeature]);
 
-      addToViewTree(rootLView, componentView);
-      refreshDescendantViews(rootLView);
-      safeToRunHooks = true;
+      renderView(rootTView, rootLView, null);
     } finally {
-      leaveView(oldLView, safeToRunHooks);
+      leaveView();
     }
 
     const componentRef = new ComponentRef(

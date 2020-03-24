@@ -20,6 +20,8 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
 
   const __symbol__ = api.symbol;
   const _uncaughtPromiseErrors: UncaughtPromiseError[] = [];
+  const isDisableWrappingUncaughtPromiseRejection =
+      global[__symbol__('DISABLE_WRAPPING_UNCAUGHT_PROMISE_REJECTION')] === true;
   const symbolPromise = __symbol__('Promise');
   const symbolThen = __symbol__('then');
   const creationTrace = '__creationTrace__';
@@ -41,13 +43,11 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
 
   api.microtaskDrainDone = () => {
     while (_uncaughtPromiseErrors.length) {
-      while (_uncaughtPromiseErrors.length) {
-        const uncaughtPromiseError: UncaughtPromiseError = _uncaughtPromiseErrors.shift() !;
-        try {
-          uncaughtPromiseError.zone.runGuarded(() => { throw uncaughtPromiseError; });
-        } catch (error) {
-          handleUnhandledRejection(error);
-        }
+      const uncaughtPromiseError: UncaughtPromiseError = _uncaughtPromiseErrors.shift() !;
+      try {
+        uncaughtPromiseError.zone.runGuarded(() => { throw uncaughtPromiseError; });
+      } catch (error) {
+        handleUnhandledRejection(error);
       }
     }
   };
@@ -58,7 +58,7 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
     api.onUnhandledError(e);
     try {
       const handler = (Zone as any)[UNHANDLED_PROMISE_REJECTION_HANDLER_SYMBOL];
-      if (handler && typeof handler === 'function') {
+      if (typeof handler === 'function') {
         handler.call(this, e);
       }
     } catch (err) {
@@ -132,7 +132,7 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
       if (state !== REJECTED && value instanceof ZoneAwarePromise &&
           value.hasOwnProperty(symbolState) && value.hasOwnProperty(symbolValue) &&
           (value as any)[symbolState] !== UNRESOLVED) {
-        clearRejectedNoCatch(<Promise<any>>value as any);
+        clearRejectedNoCatch(value);
         resolvePromise(promise, (value as any)[symbolState], (value as any)[symbolValue]);
       } else if (state !== REJECTED && typeof then === 'function') {
         try {
@@ -176,12 +176,15 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
         }
         if (queue.length == 0 && state == REJECTED) {
           (promise as any)[symbolState] = REJECTED_NO_CATCH;
-          let uncaughtPromiseError: any;
-          if (value instanceof Error || (value && value.message)) {
-            uncaughtPromiseError = value;
-          } else {
+          let uncaughtPromiseError = value;
+          if (!isDisableWrappingUncaughtPromiseRejection) {
+            // If disable wrapping uncaught promise reject
+            // and the rejected value is an Error object,
+            // use the value instead of wrapping it.
             try {
-              // try to print more readable error log
+              // Here we throws a new Error to print more readable error log
+              // and if the value is not an error, zone.js builds an `Error`
+              // Object here to attach the stack information.
               throw new Error(
                   'Uncaught (in promise): ' + readableObjectToString(value) +
                   (value && value.stack ? '\n' + value.stack : ''));
@@ -227,7 +230,7 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
   }
 
   function scheduleResolveOrReject<R, U1, U2>(
-      promise: ZoneAwarePromise<any>, zone: AmbientZone, chainPromise: ZoneAwarePromise<any>,
+      promise: ZoneAwarePromise<any>, zone: Zone, chainPromise: ZoneAwarePromise<any>,
       onFulfilled?: ((value: R) => U1) | null | undefined,
       onRejected?: ((error: any) => U2) | null | undefined): void {
     clearRejectedNoCatch(promise);
@@ -261,6 +264,8 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
 
   const ZONE_AWARE_PROMISE_TO_STRING = 'function ZoneAwarePromise() { [native code] }';
 
+  const noop = function() {};
+
   class ZoneAwarePromise<R> implements Promise<R> {
     static toString() { return ZONE_AWARE_PROMISE_TO_STRING; }
 
@@ -291,7 +296,20 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
       return promise;
     }
 
-    static all<R>(values: any): Promise<R> {
+    static all<R>(values: any): Promise<R> { return ZoneAwarePromise.allWithCallback(values); }
+
+    static allSettled<R>(values: any): Promise<R> {
+      const P = this && this.prototype instanceof ZoneAwarePromise ? this : ZoneAwarePromise;
+      return P.allWithCallback(values, {
+        thenCallback: (value: any) => ({status: 'fulfilled', value}),
+        errorCallback: (err: any) => ({status: 'rejected', reason: err})
+      });
+    }
+
+    static allWithCallback<R>(values: any, callback?: {
+      thenCallback: (value: any) => any,
+      errorCallback: (err: any) => any
+    }): Promise<R> {
       let resolve: (v: any) => void;
       let reject: (v: any) => void;
       let promise = new this<R>((res, rej) => {
@@ -310,13 +328,29 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
         }
 
         const curValueIndex = valueIndex;
-        value.then((value: any) => {
-          resolvedValues[curValueIndex] = value;
-          unresolvedCount--;
-          if (unresolvedCount === 0) {
-            resolve !(resolvedValues);
-          }
-        }, reject !);
+        try {
+          value.then(
+              (value: any) => {
+                resolvedValues[curValueIndex] = callback ? callback.thenCallback(value) : value;
+                unresolvedCount--;
+                if (unresolvedCount === 0) {
+                  resolve !(resolvedValues);
+                }
+              },
+              (err: any) => {
+                if (!callback) {
+                  reject !(err);
+                } else {
+                  resolvedValues[curValueIndex] = callback.errorCallback(err);
+                  unresolvedCount--;
+                  if (unresolvedCount === 0) {
+                    resolve !(resolvedValues);
+                  }
+                }
+              });
+        } catch (thenErr) {
+          reject !(thenErr);
+        }
 
         unresolvedCount++;
         valueIndex++;
@@ -350,12 +384,17 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
 
     get[Symbol.toStringTag]() { return 'Promise' as any; }
 
+    get[Symbol.species]() { return ZoneAwarePromise; }
+
     then<TResult1 = R, TResult2 = never>(
         onFulfilled?: ((value: R) => TResult1 | PromiseLike<TResult1>)|undefined|null,
         onRejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>)|undefined|
         null): Promise<TResult1|TResult2> {
-      const chainPromise: Promise<TResult1|TResult2> =
-          new (this.constructor as typeof ZoneAwarePromise)(null as any);
+      let C = (this.constructor as any)[Symbol.species];
+      if (!C || typeof C !== 'function') {
+        C = this.constructor || ZoneAwarePromise;
+      }
+      const chainPromise: Promise<TResult1|TResult2> = new (C as typeof ZoneAwarePromise)(noop);
       const zone = Zone.current;
       if ((this as any)[symbolState] == UNRESOLVED) {
         (<any[]>(this as any)[symbolValue]).push(zone, chainPromise, onFulfilled, onRejected);
@@ -371,8 +410,11 @@ Zone.__load_patch('ZoneAwarePromise', (global: any, Zone: ZoneType, api: _ZonePr
     }
 
     finally<U>(onFinally?: () => U | PromiseLike<U>): Promise<R> {
-      const chainPromise: Promise<R|never> =
-          new (this.constructor as typeof ZoneAwarePromise)(null as any);
+      let C = (this.constructor as any)[Symbol.species];
+      if (!C || typeof C !== 'function') {
+        C = ZoneAwarePromise;
+      }
+      const chainPromise: Promise<R|never> = new (C as typeof ZoneAwarePromise)(noop);
       (chainPromise as any)[symbolFinally] = symbolFinally;
       const zone = Zone.current;
       if ((this as any)[symbolState] == UNRESOLVED) {

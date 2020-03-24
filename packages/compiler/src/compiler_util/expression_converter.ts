@@ -70,7 +70,8 @@ export type InterpolationFunction = (args: o.Expression[]) => o.Expression;
 export function convertActionBinding(
     localResolver: LocalResolver | null, implicitReceiver: o.Expression, action: cdAst.AST,
     bindingId: string, interpolationFunction?: InterpolationFunction,
-    baseSourceSpan?: ParseSourceSpan): ConvertActionBindingResult {
+    baseSourceSpan?: ParseSourceSpan,
+    implicitReceiverAccesses?: Set<string>): ConvertActionBindingResult {
   if (!localResolver) {
     localResolver = new DefaultLocalResolver();
   }
@@ -98,7 +99,8 @@ export function convertActionBinding(
       action);
 
   const visitor = new _AstToIrVisitor(
-      localResolver, implicitReceiver, bindingId, interpolationFunction, baseSourceSpan);
+      localResolver, implicitReceiver, bindingId, interpolationFunction, baseSourceSpan,
+      implicitReceiverAccesses);
   const actionStmts: o.Statement[] = [];
   flattenStatements(actionWithoutBuiltins.visit(visitor, _Mode.Statement), actionStmts);
   prependTemporaryDecls(visitor.temporaryCount, bindingId, actionStmts);
@@ -286,18 +288,20 @@ class _BuiltinAstConverter extends cdAst.AstTransformer {
   visitPipe(ast: cdAst.BindingPipe, context: any): any {
     const args = [ast.exp, ...ast.args].map(ast => ast.visit(this, context));
     return new BuiltinFunctionCall(
-        ast.span, args, this._converterFactory.createPipeConverter(ast.name, args.length));
+        ast.span, ast.sourceSpan, args,
+        this._converterFactory.createPipeConverter(ast.name, args.length));
   }
   visitLiteralArray(ast: cdAst.LiteralArray, context: any): any {
     const args = ast.expressions.map(ast => ast.visit(this, context));
     return new BuiltinFunctionCall(
-        ast.span, args, this._converterFactory.createLiteralArrayConverter(ast.expressions.length));
+        ast.span, ast.sourceSpan, args,
+        this._converterFactory.createLiteralArrayConverter(ast.expressions.length));
   }
   visitLiteralMap(ast: cdAst.LiteralMap, context: any): any {
     const args = ast.values.map(ast => ast.visit(this, context));
 
     return new BuiltinFunctionCall(
-        ast.span, args, this._converterFactory.createLiteralMapConverter(ast.keys));
+        ast.span, ast.sourceSpan, args, this._converterFactory.createLiteralMapConverter(ast.keys));
   }
 }
 
@@ -311,7 +315,7 @@ class _AstToIrVisitor implements cdAst.AstVisitor {
   constructor(
       private _localResolver: LocalResolver, private _implicitReceiver: o.Expression,
       private bindingId: string, private interpolationFunction: InterpolationFunction|undefined,
-      private baseSourceSpan?: ParseSourceSpan) {}
+      private baseSourceSpan?: ParseSourceSpan, private implicitReceiverAccesses?: Set<string>) {}
 
   visitBinary(ast: cdAst.Binary, mode: _Mode): any {
     let op: o.BinaryOperator;
@@ -491,6 +495,7 @@ class _AstToIrVisitor implements cdAst.AstVisitor {
           this.usesImplicitReceiver = prevUsesImplicitReceiver;
           result = varExpr.callFn(args);
         }
+        this.addImplicitReceiverAccess(ast.name);
       }
       if (result == null) {
         result = receiver.callMethod(ast.name, args, this.convertSourceSpan(ast.span));
@@ -523,6 +528,7 @@ class _AstToIrVisitor implements cdAst.AstVisitor {
           // receiver has been replaced with a resolved local expression.
           this.usesImplicitReceiver = prevUsesImplicitReceiver;
         }
+        this.addImplicitReceiverAccess(ast.name);
       }
       if (result == null) {
         result = receiver.prop(ast.name);
@@ -547,9 +553,13 @@ class _AstToIrVisitor implements cdAst.AstVisitor {
           // Restore the previous "usesImplicitReceiver" state since the implicit
           // receiver has been replaced with a resolved local expression.
           this.usesImplicitReceiver = prevUsesImplicitReceiver;
+          this.addImplicitReceiverAccess(ast.name);
         } else {
           // Otherwise it's an error.
-          throw new Error('Cannot assign to a reference or variable!');
+          const receiver = ast.name;
+          const value = (ast.value instanceof cdAst.PropertyRead) ? ast.value.name : undefined;
+          throw new Error(
+              `Cannot assign value "${value}" to template variable "${receiver}". Template variables are read-only.`);
         }
       }
     }
@@ -588,7 +598,7 @@ class _AstToIrVisitor implements cdAst.AstVisitor {
     // an expression that guards the access to the member by checking the receiver for blank. As
     // execution proceeds from left to right, the left most part of the expression must be guarded
     // first but, because member access is left associative, the right side of the expression is at
-    // the top of the AST. The desired result requires lifting a copy of the the left part of the
+    // the top of the AST. The desired result requires lifting a copy of the left part of the
     // expression up to test it for blank before generating the unguarded version.
 
     // Consider, for example the following expression: a?.b.c?.d.e
@@ -642,13 +652,14 @@ class _AstToIrVisitor implements cdAst.AstVisitor {
     // leftMostNode with its unguarded version in the call to `this.visit()`.
     if (leftMostSafe instanceof cdAst.SafeMethodCall) {
       this._nodeMap.set(
-          leftMostSafe,
-          new cdAst.MethodCall(
-              leftMostSafe.span, leftMostSafe.receiver, leftMostSafe.name, leftMostSafe.args));
+          leftMostSafe, new cdAst.MethodCall(
+                            leftMostSafe.span, leftMostSafe.sourceSpan, leftMostSafe.receiver,
+                            leftMostSafe.name, leftMostSafe.args));
     } else {
       this._nodeMap.set(
-          leftMostSafe,
-          new cdAst.PropertyRead(leftMostSafe.span, leftMostSafe.receiver, leftMostSafe.name));
+          leftMostSafe, new cdAst.PropertyRead(
+                            leftMostSafe.span, leftMostSafe.sourceSpan, leftMostSafe.receiver,
+                            leftMostSafe.name));
     }
 
     // Recursively convert the node now without the guarded member access.
@@ -667,10 +678,10 @@ class _AstToIrVisitor implements cdAst.AstVisitor {
     return convertToStatementIfNeeded(mode, condition.conditional(o.literal(null), access));
   }
 
-  // Given a expression of the form a?.b.c?.d.e the the left most safe node is
+  // Given an expression of the form a?.b.c?.d.e then the left most safe node is
   // the (a?.b). The . and ?. are left associative thus can be rewritten as:
   // ((((a?.c).b).c)?.d).e. This returns the most deeply nested safe read or
-  // safe method call as this needs be transform initially to:
+  // safe method call as this needs to be transformed initially to:
   //   a == null ? null : a.c.b.c?.d.e
   // then to:
   //   a == null ? null : a.b.c == null ? null : a.b.c.d.e
@@ -762,7 +773,7 @@ class _AstToIrVisitor implements cdAst.AstVisitor {
    * show where the span is within the overall source file.
    *
    * @param span the relative span to convert.
-   * @returns a `ParseSourceSpan` for the the given span or null if no
+   * @returns a `ParseSourceSpan` for the given span or null if no
    * `baseSourceSpan` was provided to this class.
    */
   private convertSourceSpan(span: cdAst.ParseSpan) {
@@ -772,6 +783,13 @@ class _AstToIrVisitor implements cdAst.AstVisitor {
       return new ParseSourceSpan(start, end);
     } else {
       return null;
+    }
+  }
+
+  /** Adds the name of an AST to the list of implicit receiver accesses. */
+  private addImplicitReceiverAccess(name: string) {
+    if (this.implicitReceiverAccesses) {
+      this.implicitReceiverAccesses.add(name);
     }
   }
 }
@@ -812,7 +830,9 @@ function convertStmtIntoExpression(stmt: o.Statement): o.Expression|null {
 }
 
 export class BuiltinFunctionCall extends cdAst.FunctionCall {
-  constructor(span: cdAst.ParseSpan, public args: cdAst.AST[], public converter: BuiltinConverter) {
-    super(span, null, args);
+  constructor(
+      span: cdAst.ParseSpan, sourceSpan: cdAst.AbsoluteSourceSpan, public args: cdAst.AST[],
+      public converter: BuiltinConverter) {
+    super(span, sourceSpan, null, args);
   }
 }

@@ -53,7 +53,7 @@ Angular supports most recent browsers. This includes the following specific vers
       IE
     </td>
     <td>
-      11, 10, 9
+      11, 10, 9 ("compatibility view" mode not supported)
     </td>
   </tr>
  <tr>
@@ -89,7 +89,7 @@ Angular supports most recent browsers. This includes the following specific vers
     </td>
 
     <td>
-      Nougat (7.0), Marshmallow (6.0), Lollipop (5.0, 5.1), KitKat (4.4)
+      X (10.0), Pie (9.0), Oreo (8.0), Nougat (7.0)
     </td>
   </tr>
 
@@ -183,7 +183,7 @@ These are the polyfills required to run an Angular application on each supported
 
     <td>
       Chrome, Firefox, Edge, <br>
-      Safari, Android, IE10+
+      Safari, Android, IE 10+
     </td>
 
     <td>
@@ -197,7 +197,7 @@ These are the polyfills required to run an Angular application on each supported
   <tr style="vertical-align: top">
 
     <td>
-      IE9
+      IE 9
     </td>
 
     <td>
@@ -260,30 +260,6 @@ Some features of Angular may require additional polyfills.
 
     <td>
 
-     If you use the following deprecated i18n pipes:
-     [date](api/common/DeprecatedDatePipe),
-     [currency](api/common/DeprecatedCurrencyPipe),
-     [decimal](api/common/DeprecatedDecimalPipe),
-     [percent](api/common/DeprecatedPercentPipe)
-
-    </td>
-
-    <td>
-
-      [Intl API](guide/browser-support#intl)
-
-    </td>
-
-    <td>
-      All but Chrome, Firefox, Edge, IE11 and Safari 10
-    </td>
-
-  </tr>
-
-  <tr style="vertical-align: top">
-
-    <td>
-
        [NgClass](api/common/NgClass) on SVG elements
     </td>
 
@@ -294,7 +270,7 @@ Some features of Angular may require additional polyfills.
     </td>
 
     <td>
-      IE10, IE11
+      IE 10, IE 11
     </td>
 
   </tr>
@@ -539,7 +515,7 @@ For example:
      */
     // __Zone_disable_requestAnimationFrame = true; // disable patch requestAnimationFrame
     // __Zone_disable_on_property = true; // disable patch onProperty such as onclick
-    // __zone_symbol__BLACK_LISTED_EVENTS = ['scroll', 'mousemove']; // disable patch specified eventNames
+    // __zone_symbol__UNPATCHED_EVENTS = ['scroll', 'mousemove']; // disable patch specified eventNames
 
     /*
      * in IE/Edge developer tools, the addEventListener will also be wrapped by zone.js

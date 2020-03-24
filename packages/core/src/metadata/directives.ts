@@ -68,12 +68,12 @@ export interface DirectiveDecorator {
    *
    * @Annotation
    */
-  (obj: Directive): TypeDecorator;
+  (obj?: Directive): TypeDecorator;
 
   /**
    * See the `Directive` decorator.
    */
-  new (obj: Directive): Directive;
+  new (obj?: Directive): Directive;
 }
 
 /**
@@ -140,7 +140,7 @@ export interface Directive {
    * class BankAccount {
    *   bankName: string;
    *   id: string;
-   *
+   * }
    * ```
    *
    */
@@ -542,6 +542,7 @@ export interface Component extends Directive {
    * this component. For each component listed here,
    * Angular creates a {@link ComponentFactory} and stores it in the
    * {@link ComponentFactoryResolver}.
+   * @deprecated Since 9.0.0. With Ivy, this property is no longer necessary.
    */
   entryComponents?: Array<Type<any>|any[]>;
 
@@ -589,6 +590,8 @@ export interface PipeDecorator {
    * to a template. To make it a member of an NgModule,
    * list it in the `declarations` field of the `NgModule` metadata.
    *
+   * @see [Style Guide: Pipe Names](guide/styleguide#02-09)
+   *
    */
   (obj: Pipe): TypeDecorator;
 
@@ -606,7 +609,8 @@ export interface PipeDecorator {
 export interface Pipe {
   /**
    * The pipe name to use in template bindings.
-   *
+   * Typically uses [lowerCamelCase](guide/glossary#case-types)
+   * because the name cannot contain hyphens.
    */
   name: string;
 
@@ -678,6 +682,8 @@ export interface InputDecorator {
   * })
   * class App {}
   * ```
+  *
+  * @see [Input and Output properties](guide/template-syntax#input-and-output-properties)
   */
   (bindingPropertyName?: string): any;
   new (bindingPropertyName?: string): any;
@@ -720,6 +726,8 @@ export interface OutputDecorator {
   * name of the bound property is used for output binding.
   *
   * See `Input` decorator for an example of providing a binding name.
+  *
+  * @see [Input and Output properties](guide/template-syntax#input-and-output-properties)
   *
   */
   (bindingPropertyName?: string): any;
@@ -864,6 +872,29 @@ export interface HostListener {
  *   template: '<button counting>Increment</button>',
  * })
  * class App {}
+ *
+ * ```
+ *
+ * The following example registers another DOM event handler that listens for key-press events.
+ * ``` ts
+ * import { HostListener, Component } from "@angular/core";
+ *
+ * @Component({
+ *   selector: 'app',
+ *   template: `<h1>Hello, you have pressed keys {{counter}} number of times!</h1> Press any key to
+ * increment the counter.
+ *   <button (click)="resetCounter()">Reset Counter</button>`
+ * })
+ * class AppComponent {
+ *   counter = 0;
+ *   @HostListener('window:keydown', ['$event'])
+ *   handleKeyDown(event: KeyboardEvent) {
+ *     this.counter++;
+ *   }
+ *   resetCounter() {
+ *     this.counter = 0;
+ *   }
+ * }
  * ```
  *
  * @Annotation

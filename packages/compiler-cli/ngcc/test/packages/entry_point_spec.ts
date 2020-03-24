@@ -10,7 +10,7 @@ import {AbsoluteFsPath, FileSystem, absoluteFrom, getFileSystem} from '../../../
 import {runInEachFileSystem} from '../../../src/ngtsc/file_system/testing';
 import {loadTestFiles} from '../../../test/helpers';
 import {NgccConfiguration} from '../../src/packages/configuration';
-import {EntryPoint, SUPPORTED_FORMAT_PROPERTIES, getEntryPointFormat, getEntryPointInfo} from '../../src/packages/entry_point';
+import {EntryPoint, INVALID_ENTRY_POINT, NO_ENTRY_POINT, SUPPORTED_FORMAT_PROPERTIES, getEntryPointFormat, getEntryPointInfo} from '../../src/packages/entry_point';
 import {MockLogger} from '../helpers/mock_logger';
 
 runInEachFileSystem(() => {
@@ -50,10 +50,12 @@ runInEachFileSystem(() => {
                _(`/project/node_modules/some_package/valid_entry_point/valid_entry_point.d.ts`),
            packageJson: loadPackageJson(fs, '/project/node_modules/some_package/valid_entry_point'),
            compiledByAngular: true,
+           ignoreMissingDependencies: false,
+           generateDeepReexports: false,
          });
        });
 
-    it('should return null if configured to ignore the specified entry-point', () => {
+    it('should return `NO_ENTRY_POINT` if configured to ignore the specified entry-point', () => {
       loadTestFiles([
         {
           name: _('/project/node_modules/some_package/valid_entry_point/package.json'),
@@ -73,7 +75,7 @@ runInEachFileSystem(() => {
       const entryPoint = getEntryPointInfo(
           fs, config, new MockLogger(), SOME_PACKAGE,
           _('/project/node_modules/some_package/valid_entry_point'));
-      expect(entryPoint).toBe(null);
+      expect(entryPoint).toBe(NO_ENTRY_POINT);
     });
 
     it('should override the properties on package.json if the entry-point is configured', () => {
@@ -109,10 +111,12 @@ runInEachFileSystem(() => {
         typings: _('/project/node_modules/some_package/valid_entry_point/some_other.d.ts'),
         packageJson: overriddenPackageJson,
         compiledByAngular: true,
+        ignoreMissingDependencies: false,
+        generateDeepReexports: false,
       });
     });
 
-    it('should return null if there is no package.json at the entry-point path', () => {
+    it('should return `NO_ENTRY_POINT` if there is no package.json at the entry-point path', () => {
       loadTestFiles([
         {
           name: _(
@@ -124,7 +128,7 @@ runInEachFileSystem(() => {
       const entryPoint = getEntryPointInfo(
           fs, config, new MockLogger(), SOME_PACKAGE,
           _('/project/node_modules/some_package/missing_package_json'));
-      expect(entryPoint).toBe(null);
+      expect(entryPoint).toBe(NO_ENTRY_POINT);
     });
 
     it('should return a configured entry-point if there is no package.json at the entry-point path',
@@ -155,28 +159,51 @@ runInEachFileSystem(() => {
                '/project/node_modules/some_package/missing_package_json/missing_package_json.d.ts'),
            packageJson: {name: 'some_package/missing_package_json', ...override},
            compiledByAngular: true,
+           ignoreMissingDependencies: false,
+           generateDeepReexports: false,
          });
        });
 
 
-    it('should return null if there is no typings or types field in the package.json', () => {
-      loadTestFiles([
-        {
-          name: _('/project/node_modules/some_package/missing_typings/package.json'),
-          contents: createPackageJson('missing_typings', {excludes: ['typings']})
-        },
-        {
-          name:
-              _('/project/node_modules/some_package/missing_typings/missing_typings.metadata.json'),
-          contents: 'some meta data'
-        },
-      ]);
-      const config = new NgccConfiguration(fs, _('/project'));
-      const entryPoint = getEntryPointInfo(
-          fs, config, new MockLogger(), SOME_PACKAGE,
-          _('/project/node_modules/some_package/missing_typings'));
-      expect(entryPoint).toBe(null);
-    });
+    it('should return `INVALID_ENTRY_POINT` if there is no typings or types field in the package.json',
+       () => {
+         loadTestFiles([
+           {
+             name: _('/project/node_modules/some_package/missing_typings/package.json'),
+             contents: createPackageJson('missing_typings', {excludes: ['typings']})
+           },
+           {
+             name: _(
+                 '/project/node_modules/some_package/missing_typings/missing_typings.metadata.json'),
+             contents: 'some meta data'
+           },
+         ]);
+         const config = new NgccConfiguration(fs, _('/project'));
+         const entryPoint = getEntryPointInfo(
+             fs, config, new MockLogger(), SOME_PACKAGE,
+             _('/project/node_modules/some_package/missing_typings'));
+         expect(entryPoint).toBe(INVALID_ENTRY_POINT);
+       });
+
+    it('should return `INVALID_ENTRY_POINT` if the typings or types field is not a string in the package.json',
+       () => {
+         loadTestFiles([
+           {
+             name: _('/project/node_modules/some_package/typings_array/package.json'),
+             contents: createPackageJson('typings_array', {typingsIsArray: true})
+           },
+           {
+             name: _(
+                 '/project/node_modules/some_package/typings_array/missing_typings.metadata.json'),
+             contents: 'some meta data'
+           },
+         ]);
+         const config = new NgccConfiguration(fs, _('/project'));
+         const entryPoint = getEntryPointInfo(
+             fs, config, new MockLogger(), SOME_PACKAGE,
+             _('/project/node_modules/some_package/typings_array'));
+         expect(entryPoint).toBe(INVALID_ENTRY_POINT);
+       });
 
     for (let prop of SUPPORTED_FORMAT_PROPERTIES) {
       // Ignore the UMD format
@@ -211,6 +238,8 @@ runInEachFileSystem(() => {
           typings: _(`/project/node_modules/some_package/missing_typings/${typingsPath}.d.ts`),
           packageJson: loadPackageJson(fs, '/project/node_modules/some_package/missing_typings'),
           compiledByAngular: true,
+          ignoreMissingDependencies: false,
+          generateDeepReexports: false,
         });
       });
     }
@@ -234,6 +263,8 @@ runInEachFileSystem(() => {
            typings: _(`/project/node_modules/some_package/missing_metadata/missing_metadata.d.ts`),
            packageJson: loadPackageJson(fs, '/project/node_modules/some_package/missing_metadata'),
            compiledByAngular: false,
+           ignoreMissingDependencies: false,
+           generateDeepReexports: false,
          });
        });
 
@@ -260,6 +291,8 @@ runInEachFileSystem(() => {
            typings: _('/project/node_modules/some_package/missing_metadata/missing_metadata.d.ts'),
            packageJson: loadPackageJson(fs, '/project/node_modules/some_package/missing_metadata'),
            compiledByAngular: true,
+           ignoreMissingDependencies: false,
+           generateDeepReexports: false,
          });
        });
 
@@ -267,7 +300,7 @@ runInEachFileSystem(() => {
       loadTestFiles([
         {
           name: _('/project/node_modules/some_package/types_rather_than_typings/package.json'),
-          contents: createPackageJson('types_rather_than_typings', {}, 'types')
+          contents: createPackageJson('types_rather_than_typings', {typingsProp: 'types'})
         },
         {
           name: _(
@@ -288,6 +321,8 @@ runInEachFileSystem(() => {
         packageJson:
             loadPackageJson(fs, '/project/node_modules/some_package/types_rather_than_typings'),
         compiledByAngular: true,
+        ignoreMissingDependencies: false,
+        generateDeepReexports: false,
       });
     });
 
@@ -319,10 +354,12 @@ runInEachFileSystem(() => {
         typings: _(`/project/node_modules/some_package/material_style/material_style.d.ts`),
         packageJson: loadPackageJson(fs, '/project/node_modules/some_package/material_style'),
         compiledByAngular: true,
+        ignoreMissingDependencies: false,
+        generateDeepReexports: false,
       });
     });
 
-    it('should return null if the package.json is not valid JSON', () => {
+    it('should return `INVALID_ENTRY_POINT` if the package.json is not valid JSON', () => {
       loadTestFiles([
         // package.json might not be a valid JSON
         // for example, @schematics/angular contains a package.json blueprint
@@ -336,7 +373,7 @@ runInEachFileSystem(() => {
       const entryPoint = getEntryPointInfo(
           fs, config, new MockLogger(), SOME_PACKAGE,
           _('/project/node_modules/some_package/unexpected_symbols'));
-      expect(entryPoint).toBe(null);
+      expect(entryPoint).toBe(INVALID_ENTRY_POINT);
     });
   });
 
@@ -355,9 +392,13 @@ runInEachFileSystem(() => {
         contents: createPackageJson('valid_entry_point')
       }]);
       const config = new NgccConfiguration(fs, _('/project'));
-      entryPoint = getEntryPointInfo(
+      const result = getEntryPointInfo(
           fs, config, new MockLogger(), SOME_PACKAGE,
-          _('/project/node_modules/some_package/valid_entry_point')) !;
+          _('/project/node_modules/some_package/valid_entry_point'));
+      if (result === NO_ENTRY_POINT || result === INVALID_ENTRY_POINT) {
+        return fail(`Expected an entry point but got ${result}`);
+      }
+      entryPoint = result;
     });
 
     it('should return `esm2015` format for `fesm2015` property',
@@ -425,27 +466,28 @@ runInEachFileSystem(() => {
       expect(getEntryPointFormat(fs, entryPoint, 'main')).toBe('umd');
     });
   });
-
-  function createPackageJson(
-      packageName: string, {excludes}: {excludes?: string[]} = {},
-      typingsProp: string = 'typings'): string {
-    const packageJson: any = {
-      name: `some_package/${packageName}`,
-      [typingsProp]: `./${packageName}.d.ts`,
-      fesm2015: `./fesm2015/${packageName}.js`,
-      esm2015: `./esm2015/${packageName}.js`,
-      es2015: `./es2015/${packageName}.js`,
-      fesm5: `./fesm5/${packageName}.js`,
-      esm5: `./esm5/${packageName}.js`,
-      main: `./bundles/${packageName}/index.js`,
-      module: './index.js',
-    };
-    if (excludes) {
-      excludes.forEach(exclude => delete packageJson[exclude]);
-    }
-    return JSON.stringify(packageJson);
-  }
 });
+
+export function createPackageJson(
+    packageName: string,
+    {excludes, typingsProp = 'typings', typingsIsArray}:
+        {excludes?: string[], typingsProp?: string, typingsIsArray?: boolean} = {}): string {
+  const packageJson: any = {
+    name: `some_package/${packageName}`,
+    [typingsProp]: typingsIsArray ? [`./${packageName}.d.ts`] : `./${packageName}.d.ts`,
+    fesm2015: `./fesm2015/${packageName}.js`,
+    esm2015: `./esm2015/${packageName}.js`,
+    es2015: `./es2015/${packageName}.js`,
+    fesm5: `./fesm5/${packageName}.js`,
+    esm5: `./esm5/${packageName}.js`,
+    main: `./bundles/${packageName}/index.js`,
+    module: './index.js',
+  };
+  if (excludes) {
+    excludes.forEach(exclude => delete packageJson[exclude]);
+  }
+  return JSON.stringify(packageJson);
+}
 
 export function loadPackageJson(fs: FileSystem, packagePath: string) {
   return JSON.parse(fs.readFile(fs.resolve(packagePath + '/package.json')));

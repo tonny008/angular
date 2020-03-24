@@ -73,7 +73,7 @@ Now you'll find new files in the Angular workspace:
 * `/WORKSPACE` tells Bazel how to download external dependencies.
 * `/BUILD.bazel` and `/src/BUILD.bazel` tell Bazel about your source code.
 
-You can find a full-featured example with custom Bazel configurations at http://github.com/angular/angular-bazel-example.
+You can find a full-featured example with custom Bazel configurations at https://github.com/bazelbuild/rules_nodejs/tree/master/examples/angular.
 
 Documentation for using Bazel for frontend projects is linked from https://docs.bazel.build/versions/master/bazel-and-javascript.html.
 
@@ -82,16 +82,16 @@ Documentation for using Bazel for frontend projects is linked from https://docs.
 ## Running Bazel directly
 
 In some cases you'll want to bypass the Angular CLI builder, and run the Bazel CLI directly.
-The Bazel CLI is in the `@bazel/bazel` npm package.
-You can install it globally to get the `bazel` command in your path, or use `$(npm bin)/bazel` in place of bazel below.
+The Bazel tool is managed by the `@bazel/bazelisk` package (similar to how Node.js can be managed by `nvm`).
+You can install it globally to get the `bazelisk` command in your path, or use `$(npm bin)/bazelisk` in place of bazelisk below.
 
 The common commands in Bazel are:
 
-* `bazel build [targets]`: Compile the default output artifacts of the given targets.
-* `bazel test [targets]`: For whichever `*_test` targets are found in the patterns, run the tests.
-* `bazel run [target]`: Compile the program represented by target, and then run it.
+* `bazelisk build [targets]`: Compile the default output artifacts of the given targets.
+* `bazelisk test [targets]`: For whichever `*_test` targets are found in the patterns, run the tests.
+* `bazelisk run [target]`: Compile the program represented by target, and then run it.
 
-To repeat the command any time the inputs change (watch mode), replace `bazel` with `ibazel` in these commands.
+To repeat the command any time the inputs change (watch mode), replace `bazelisk` with `ibazel` in these commands.
 
 The output locations are printed in the output.
 

@@ -230,7 +230,7 @@ export class MetadataCollector {
             const property = <ts.PropertyDeclaration>member;
             if (isStatic(property)) {
               const name = evaluator.nameOf(property.name);
-              if (!isMetadataError(name)) {
+              if (!isMetadataError(name) && !shouldIgnoreStaticMember(name)) {
                 if (property.initializer) {
                   const value = evaluator.evaluateNode(property.initializer);
                   recordStaticMember(name, value);
@@ -267,9 +267,9 @@ export class MetadataCollector {
           const exportDeclaration = <ts.ExportDeclaration>node;
           const {moduleSpecifier, exportClause} = exportDeclaration;
 
-          if (!moduleSpecifier) {
+          if (!moduleSpecifier && exportClause && ts.isNamedExports(exportClause)) {
             // If there is a module specifier there is also an exportClause
-            exportClause !.elements.forEach(spec => {
+            exportClause.elements.forEach(spec => {
               const exportedAs = spec.name.text;
               const name = (spec.propertyName || spec.name).text;
               exportMap.set(name, exportedAs);
@@ -344,7 +344,7 @@ export class MetadataCollector {
 
           if (!moduleSpecifier) {
             // no module specifier -> export {propName as name};
-            if (exportClause) {
+            if (exportClause && ts.isNamedExports(exportClause)) {
               exportClause.elements.forEach(spec => {
                 const name = spec.name.text;
                 // If the symbol was not already exported, export a reference since it is a
@@ -364,7 +364,7 @@ export class MetadataCollector {
             // This is allowed by the syntax but will be flagged as an error by the type checker.
             const from = (<ts.StringLiteral>moduleSpecifier).text;
             const moduleExport: ModuleExportMetadata = {from};
-            if (exportClause) {
+            if (exportClause && ts.isNamedExports(exportClause)) {
               moduleExport.export = exportClause.elements.map(
                   spec => spec.propertyName ? {name: spec.propertyName.text, as: spec.name.text} :
                                               spec.name.text);
@@ -457,8 +457,8 @@ export class MetadataCollector {
                   left: {
                     __symbolic: 'select',
                     expression: recordEntry({__symbolic: 'reference', name: enumName}, node), name
-                  } as any,
-                };
+                  },
+                } as any;
               } else {
                 nextDefaultValue =
                     recordEntry(errorSym('Unsupported enum member name', member.name), node);
@@ -742,6 +742,10 @@ function namesOf(parameters: ts.NodeArray<ts.ParameterDeclaration>): string[] {
   }
 
   return result;
+}
+
+function shouldIgnoreStaticMember(memberName: string): boolean {
+  return memberName.startsWith('ngAcceptInputType_') || memberName.startsWith('ngTemplateGuard_');
 }
 
 function expandedMessage(error: any): string {

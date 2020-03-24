@@ -211,6 +211,29 @@ runInEachFileSystem(() => {
         expect(args.length).toBe(1);
         expectParameter(args[0], 'bar', {moduleName: './bar', name: 'Bar'});
       });
+
+      it('should reflect the arguments from an overloaded constructor', () => {
+        const {program} = makeProgram([{
+          name: _('/entry.ts'),
+          contents: `
+            class Bar {}
+            class Baz {}
+
+            class Foo {
+              constructor(bar: Bar);
+              constructor(bar: Bar, baz?: Baz) {}
+            }
+        `
+        }]);
+        const clazz = getDeclaration(program, _('/entry.ts'), 'Foo', isNamedClassDeclaration);
+        const checker = program.getTypeChecker();
+        const host = new TypeScriptReflectionHost(checker);
+        const args = host.getConstructorParameters(clazz) !;
+        expect(args.length).toBe(2);
+        expectParameter(args[0], 'bar', 'Bar');
+        expectParameter(args[1], 'baz', 'Baz');
+      });
+
     });
 
 
@@ -307,8 +330,9 @@ runInEachFileSystem(() => {
         } else if (directTargetDecl === null) {
           return fail('No declaration found for DirectTarget');
         }
-        expect(targetDecl.node.getSourceFile().fileName).toBe(_('/node_modules/absolute/index.ts'));
-        expect(ts.isClassDeclaration(targetDecl.node)).toBe(true);
+        expect(targetDecl.node !.getSourceFile().fileName)
+            .toBe(_('/node_modules/absolute/index.ts'));
+        expect(ts.isClassDeclaration(targetDecl.node !)).toBe(true);
         expect(directTargetDecl.viaModule).toBe('absolute');
         expect(directTargetDecl.node).toBe(targetDecl.node);
       });
@@ -338,6 +362,7 @@ runInEachFileSystem(() => {
         const decl = host.getDeclarationOfIdentifier(Target);
         expect(decl).toEqual({
           node: targetDecl,
+          known: null,
           viaModule: 'absolute',
         });
       });
@@ -367,6 +392,7 @@ runInEachFileSystem(() => {
         const decl = host.getDeclarationOfIdentifier(Target);
         expect(decl).toEqual({
           node: targetDecl,
+          known: null,
           viaModule: 'absolute',
         });
       });

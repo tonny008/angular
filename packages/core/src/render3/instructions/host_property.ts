@@ -5,12 +5,13 @@
  * Use of this source code is governed by an MIT-style license that can be
  * found in the LICENSE file at https://angular.io/license
  */
-import {assertNotEqual} from '../../util/assert';
+import {bindingUpdated} from '../bindings';
 import {SanitizerFn} from '../interfaces/sanitization';
-import {getLView, getSelectedIndex} from '../state';
+import {RENDERER} from '../interfaces/view';
+import {getLView, getSelectedTNode, getTView, nextBindingIndex} from '../state';
 import {NO_CHANGE} from '../tokens';
-import {bind} from './property';
-import {TsickleIssue1009, elementPropertyInternal, loadComponentRenderer} from './shared';
+
+import {elementPropertyInternal, loadComponentRenderer, storePropertyBindingMetadata} from './shared';
 
 /**
  * Update a property on a host element. Only applies to native node properties, not inputs.
@@ -27,13 +28,14 @@ import {TsickleIssue1009, elementPropertyInternal, loadComponentRenderer} from '
  * @codeGenApi
  */
 export function ɵɵhostProperty<T>(
-    propName: string, value: T, sanitizer?: SanitizerFn | null): TsickleIssue1009 {
-  const index = getSelectedIndex();
-  ngDevMode && assertNotEqual(index, -1, 'selected index cannot be -1');
+    propName: string, value: T, sanitizer?: SanitizerFn | null): typeof ɵɵhostProperty {
   const lView = getLView();
-  const bindReconciledValue = bind(lView, value);
-  if (bindReconciledValue !== NO_CHANGE) {
-    elementPropertyInternal(index, propName, bindReconciledValue, sanitizer, true);
+  const bindingIndex = nextBindingIndex();
+  if (bindingUpdated(lView, bindingIndex, value)) {
+    const tView = getTView();
+    const tNode = getSelectedTNode();
+    elementPropertyInternal(tView, tNode, lView, propName, value, lView[RENDERER], sanitizer, true);
+    ngDevMode && storePropertyBindingMetadata(tView.data, tNode, propName, bindingIndex);
   }
   return ɵɵhostProperty;
 }
@@ -61,13 +63,16 @@ export function ɵɵhostProperty<T>(
  * @codeGenApi
  */
 export function ɵɵupdateSyntheticHostBinding<T>(
-    propName: string, value: T | NO_CHANGE, sanitizer?: SanitizerFn | null): TsickleIssue1009 {
-  const index = getSelectedIndex();
+    propName: string, value: T | NO_CHANGE,
+    sanitizer?: SanitizerFn | null): typeof ɵɵupdateSyntheticHostBinding {
   const lView = getLView();
-  // TODO(benlesh): remove bind call here.
-  const bound = bind(lView, value);
-  if (bound !== NO_CHANGE) {
-    elementPropertyInternal(index, propName, bound, sanitizer, true, loadComponentRenderer);
+  const bindingIndex = nextBindingIndex();
+  if (bindingUpdated(lView, bindingIndex, value)) {
+    const tView = getTView();
+    const tNode = getSelectedTNode();
+    const renderer = loadComponentRenderer(tNode, lView);
+    elementPropertyInternal(tView, tNode, lView, propName, value, renderer, sanitizer, true);
+    ngDevMode && storePropertyBindingMetadata(tView.data, tNode, propName, bindingIndex);
   }
   return ɵɵupdateSyntheticHostBinding;
 }

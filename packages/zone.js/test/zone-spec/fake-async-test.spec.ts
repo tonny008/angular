@@ -84,7 +84,9 @@ describe('FakeAsyncTestZoneSpec', () => {
        () => {
          fakeAsyncTestZone.run(() => {
            Promise.resolve(null).then((_) => { throw new Error('async'); });
-           expect(() => { testZoneSpec.flushMicrotasks(); }).toThrowError(/async/);
+           expect(() => {
+             testZoneSpec.flushMicrotasks();
+           }).toThrowError(/Uncaught \(in promise\): Error: async/);
          });
        });
 
@@ -142,6 +144,36 @@ describe('FakeAsyncTestZoneSpec', () => {
            expect(ran).toEqual(true);
          });
        }));
+
+    it('should default to processNewMacroTasksSynchronously if providing other flags', () => {
+      function nestedTimer(callback: () => any): void {
+        setTimeout(() => setTimeout(() => callback()));
+      }
+      fakeAsyncTestZone.run(() => {
+        const callback = jasmine.createSpy('callback');
+        nestedTimer(callback);
+        expect(callback).not.toHaveBeenCalled();
+        testZoneSpec.tick(0, null, {});
+        expect(callback).toHaveBeenCalled();
+      });
+    });
+
+
+    it('should not queue new macro task on tick with processNewMacroTasksSynchronously=false',
+       () => {
+         function nestedTimer(callback: () => any): void {
+           setTimeout(() => setTimeout(() => callback()));
+         }
+         fakeAsyncTestZone.run(() => {
+           const callback = jasmine.createSpy('callback');
+           nestedTimer(callback);
+           expect(callback).not.toHaveBeenCalled();
+           testZoneSpec.tick(0, null, {processNewMacroTasksSynchronously: false});
+           expect(callback).not.toHaveBeenCalled();
+           testZoneSpec.flush();
+           expect(callback).toHaveBeenCalled();
+         });
+       });
 
     it('should run queued timer after sufficient clock ticks', () => {
       fakeAsyncTestZone.run(() => {
@@ -1169,7 +1201,7 @@ const {fakeAsync, tick, discardPeriodicTasks, flush, flushMicrotasks} = fakeAsyn
             resolvedPromise.then((_) => { throw new Error('async'); });
             flushMicrotasks();
           })();
-        }).toThrowError(/async/);
+        }).toThrowError(/Uncaught \(in promise\): Error: async/);
       });
 
       it('should complain if a test throws an exception', () => {

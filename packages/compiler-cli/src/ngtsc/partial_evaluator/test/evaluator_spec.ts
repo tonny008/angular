@@ -6,14 +6,17 @@
  * found in the LICENSE file at https://angular.io/license
  */
 import * as ts from 'typescript';
+
 import {absoluteFrom, getSourceFileOrError} from '../../file_system';
 import {runInEachFileSystem} from '../../file_system/testing';
 import {Reference} from '../../imports';
-import {FunctionDefinition, TsHelperFn, TypeScriptReflectionHost} from '../../reflection';
+import {DependencyTracker} from '../../incremental/api';
+import {Declaration, KnownDeclaration, TypeScriptReflectionHost} from '../../reflection';
 import {getDeclaration, makeProgram} from '../../testing';
 import {DynamicValue} from '../src/dynamic';
 import {PartialEvaluator} from '../src/interface';
-import {EnumValue} from '../src/result';
+import {EnumValue, ResolvedValue} from '../src/result';
+
 import {evaluate, firstArgFfr, makeEvaluator, makeExpression, owningModuleOf} from './utils';
 
 runInEachFileSystem(() => {
@@ -151,6 +154,11 @@ runInEachFileSystem(() => {
     it('array access works',
        () => { expect(evaluate(`const a = [1, 2, 3];`, 'a[1] + a[0]')).toEqual(3); });
 
+    it('array access out of bounds is `undefined`', () => {
+      expect(evaluate(`const a = [1, 2, 3];`, 'a[-1]')).toEqual(undefined);
+      expect(evaluate(`const a = [1, 2, 3];`, 'a[3]')).toEqual(undefined);
+    });
+
     it('array `length` property access works',
        () => { expect(evaluate(`const a = [1, 2, 3];`, 'a[\'length\'] + 1')).toEqual(4); });
 
@@ -181,6 +189,97 @@ runInEachFileSystem(() => {
        () => { expect(evaluate('const a = undefined;', 'a')).toEqual(undefined); });
 
     it('supports null', () => { expect(evaluate('const a = null;', 'a')).toEqual(null); });
+
+    it('resolves unknown binary operators as dynamic value', () => {
+      const value = evaluate('declare const window: any;', '"location" in window');
+      if (!(value instanceof DynamicValue)) {
+        return fail(`Should have resolved to a DynamicValue`);
+      }
+      expect(value.node.getText()).toEqual('"location" in window');
+      expect(value.isFromUnsupportedSyntax()).toBe(true);
+    });
+
+    it('resolves unknown unary operators as dynamic value', () => {
+      const value = evaluate('let index = 0;', '++index');
+      if (!(value instanceof DynamicValue)) {
+        return fail(`Should have resolved to a DynamicValue`);
+      }
+      expect(value.node.getText()).toEqual('++index');
+      expect(value.isFromUnsupportedSyntax()).toBe(true);
+    });
+
+    it('resolves invalid element accesses as dynamic value', () => {
+      const value = evaluate('const a = {}; const index: any = true;', 'a[index]');
+      if (!(value instanceof DynamicValue)) {
+        return fail(`Should have resolved to a DynamicValue`);
+      }
+      expect(value.node.getText()).toEqual('a[index]');
+      if (!value.isFromInvalidExpressionType()) {
+        return fail('Should have an invalid expression type as reason');
+      }
+      expect(value.reason).toEqual(true);
+    });
+
+    it('resolves invalid array accesses as dynamic value', () => {
+      const value = evaluate('const a = []; const index = 1.5;', 'a[index]');
+      if (!(value instanceof DynamicValue)) {
+        return fail(`Should have resolved to a DynamicValue`);
+      }
+      expect(value.node.getText()).toEqual('a[index]');
+      if (!value.isFromInvalidExpressionType()) {
+        return fail('Should have an invalid expression type as reason');
+      }
+      expect(value.reason).toEqual(1.5);
+    });
+
+    it('resolves binary operator on non-literals as dynamic value', () => {
+      const value = evaluate('const a: any = []; const b: any = [];', 'a + b');
+      if (!(value instanceof DynamicValue)) {
+        return fail(`Should have resolved to a DynamicValue`);
+      }
+      expect(value.node.getText()).toEqual('a + b');
+      if (!(value.reason instanceof DynamicValue)) {
+        return fail(`Should have a DynamicValue as reason`);
+      }
+      if (!value.reason.isFromInvalidExpressionType()) {
+        return fail('Should have an invalid expression type as reason');
+      }
+      expect(value.reason.node.getText()).toEqual('a');
+      expect(value.reason.reason).toEqual([]);
+    });
+
+    it('resolves invalid spreads in array literals as dynamic value', () => {
+      const array = evaluate('const a: any = true;', '[1, ...a]');
+      if (!Array.isArray(array)) {
+        return fail(`Should have resolved to an array`);
+      }
+      expect(array[0]).toBe(1);
+      const value = array[1];
+      if (!(value instanceof DynamicValue)) {
+        return fail(`Should have resolved to a DynamicValue`);
+      }
+      expect(value.node.getText()).toEqual('...a');
+      if (!value.isFromInvalidExpressionType()) {
+        return fail('Should have an invalid spread element as reason');
+      }
+      expect(value.reason).toEqual(true);
+    });
+
+    it('resolves invalid spreads in object literals as dynamic value', () => {
+      const value = evaluate('const a: any = true;', '{b: true, ...a}');
+      if (!(value instanceof DynamicValue)) {
+        return fail(`Should have resolved to a DynamicValue`);
+      }
+      expect(value.node.getText()).toEqual('{b: true, ...a}');
+      if (!value.isFromDynamicInput()) {
+        return fail('Should have a dynamic input as reason');
+      }
+      expect(value.reason.node.getText()).toEqual('...a');
+      if (!value.reason.isFromInvalidExpressionType()) {
+        return fail('Should have an invalid spread element as reason');
+      }
+      expect(value.reason.reason).toEqual(true);
+    });
 
     it('resolves access from external variable declarations as dynamic value', () => {
       const value = evaluate('declare const window: any;', 'window.location');
@@ -291,6 +390,38 @@ runInEachFileSystem(() => {
         b: 2,
         c: 3,
       });
+    });
+
+    it('module spread works', () => {
+      const map = evaluate<Map<string, number>>(
+          `import * as mod from './module'; const c = {...mod, c: 3};`, 'c', [
+            {name: _('/module.ts'), contents: `export const a = 1; export const b = 2;`},
+          ]);
+
+      const obj: {[key: string]: number} = {};
+      map.forEach((value, key) => obj[key] = value);
+      expect(obj).toEqual({
+        a: 1,
+        b: 2,
+        c: 3,
+      });
+    });
+
+    it('evaluates module exports lazily to avoid infinite recursion', () => {
+      const value = evaluate(`import * as mod1 from './mod1';`, 'mod1.primary', [
+        {
+          name: _('/mod1.ts'),
+          contents: `
+            import * as mod2 from './mod2';
+            export const primary = mod2.indirection;
+            export const secondary = 2;`
+        },
+        {
+          name: _('/mod2.ts'),
+          contents: `import * as mod1 from './mod1'; export const indirection = mod1.secondary;`
+        },
+      ]);
+      expect(value).toEqual(2);
     });
 
     it('indirected-via-object function call works', () => {
@@ -407,60 +538,242 @@ runInEachFileSystem(() => {
       expect((value.node as ts.CallExpression).expression.getText()).toBe('foo');
     });
 
-    it('should evaluate TypeScript __spread helper', () => {
-      const {checker, expression} = makeExpression(
-          `
-        import * as tslib from 'tslib';
-        const a = [1];
-        const b = [2, 3];
-      `,
-          'tslib.__spread(a, b)', [
-            {
-              name: _('/node_modules/tslib/index.d.ts'),
-              contents: `
-          export declare function __spread(...args: any[]): any[];
-        `
-            },
-          ]);
-      const reflectionHost = new TsLibAwareReflectionHost(checker);
-      const evaluator = new PartialEvaluator(reflectionHost, checker);
-      const value = evaluator.evaluate(expression);
-      expect(value).toEqual([1, 2, 3]);
+    describe('(with imported TypeScript helpers)', () => {
+      // Helpers
+      const evaluateExpression = <T extends ResolvedValue>(code: string, expr: string) => {
+        const {checker, expression} = makeExpression(code, expr, [
+          {
+            name: _('/node_modules/tslib/index.d.ts'),
+            contents: `
+              export declare function __assign(t: any, ...sources: any[]): any;
+              export declare function __spread(...args: any[][]): any[];
+              export declare function __spreadArrays(...args: any[][]): any[];
+            `,
+          },
+        ]);
+
+        const reflectionHost = new TsLibAwareReflectionHost(checker);
+        const evaluator = new PartialEvaluator(reflectionHost, checker, null);
+
+        return evaluator.evaluate(expression) as T;
+      };
+
+      it('should evaluate `__assign()` (named import)', () => {
+        const map: Map<string, boolean> = evaluateExpression(
+            `
+              import {__assign} from 'tslib';
+              const a = {a: true};
+              const b = {b: true};
+            `,
+            '__assign(a, b)');
+
+        expect([...map]).toEqual([
+          ['a', true],
+          ['b', true],
+        ]);
+      });
+
+      it('should evaluate `__assign()` (star import)', () => {
+        const map: Map<string, boolean> = evaluateExpression(
+            `
+              import * as tslib from 'tslib';
+              const a = {a: true};
+              const b = {b: true};
+            `,
+            'tslib.__assign(a, b)');
+
+        expect([...map]).toEqual([
+          ['a', true],
+          ['b', true],
+        ]);
+      });
+
+      it('should evaluate `__spread()` (named import)', () => {
+        const arr: number[] = evaluateExpression(
+            `
+              import {__spread} from 'tslib';
+              const a = [1];
+              const b = [2, 3];
+            `,
+            '__spread(a, b)');
+
+        expect(arr).toEqual([1, 2, 3]);
+      });
+
+      it('should evaluate `__spread()` (star import)', () => {
+        const arr: number[] = evaluateExpression(
+            `
+              import * as tslib from 'tslib';
+              const a = [1];
+              const b = [2, 3];
+            `,
+            'tslib.__spread(a, b)');
+
+        expect(arr).toEqual([1, 2, 3]);
+      });
+
+      it('should evaluate `__spreadArrays()` (named import)', () => {
+        const arr: number[] = evaluateExpression(
+            `
+              import {__spreadArrays} from 'tslib';
+              const a = [4];
+              const b = [5, 6];
+            `,
+            '__spreadArrays(a, b)');
+
+        expect(arr).toEqual([4, 5, 6]);
+      });
+
+      it('should evaluate `__spreadArrays()` (star import)', () => {
+        const arr: number[] = evaluateExpression(
+            `
+              import * as tslib from 'tslib';
+              const a = [4];
+              const b = [5, 6];
+            `,
+            'tslib.__spreadArrays(a, b)');
+
+        expect(arr).toEqual([4, 5, 6]);
+      });
+    });
+
+    describe('(with emitted TypeScript helpers as functions)', () => {
+      // Helpers
+      const evaluateExpression = <T extends ResolvedValue>(code: string, expr: string) => {
+        const helpers = `
+          function __assign(t, ...sources) { /* ... */ }
+          function __spread(...args) { /* ... */ }
+          function __spreadArrays(...args) { /* ... */ }
+        `;
+        const {checker, expression} = makeExpression(helpers + code, expr);
+
+        const reflectionHost = new TsLibAwareReflectionHost(checker);
+        const evaluator = new PartialEvaluator(reflectionHost, checker, null);
+
+        return evaluator.evaluate(expression) as T;
+      };
+
+      it('should evaluate `__assign()`', () => {
+        const map: Map<string, boolean> = evaluateExpression(
+            `
+              const a = {a: true};
+              const b = {b: true};
+            `,
+            '__assign(a, b)');
+
+        expect([...map]).toEqual([
+          ['a', true],
+          ['b', true],
+        ]);
+      });
+
+      it('should evaluate `__spread()`', () => {
+        const arr: number[] = evaluateExpression(
+            `
+              const a = [1];
+              const b = [2, 3];
+            `,
+            '__spread(a, b)');
+
+        expect(arr).toEqual([1, 2, 3]);
+      });
+
+      it('should evaluate `__spreadArrays()`', () => {
+        const arr: number[] = evaluateExpression(
+            `
+              const a = [4];
+              const b = [5, 6];
+            `,
+            '__spreadArrays(a, b)');
+
+        expect(arr).toEqual([4, 5, 6]);
+      });
+    });
+
+    describe('(with emitted TypeScript helpers as variables)', () => {
+      // Helpers
+      const evaluateExpression = <T extends ResolvedValue>(code: string, expr: string) => {
+        const helpers = `
+          var __assign = (this && this.__assign) || function (t, ...sources) { /* ... */ }
+          var __spread = (this && this.__spread) || function (...args) { /* ... */ }
+          var __spreadArrays = (this && this.__spreadArrays) || function (...args) { /* ... */ }
+        `;
+        const {checker, expression} = makeExpression(helpers + code, expr);
+
+        const reflectionHost = new TsLibAwareReflectionHost(checker);
+        const evaluator = new PartialEvaluator(reflectionHost, checker, null);
+
+        return evaluator.evaluate(expression) as T;
+      };
+
+      it('should evaluate `__assign()`', () => {
+        const map: Map<string, boolean> = evaluateExpression(
+            `
+              const a = {a: true};
+              const b = {b: true};
+            `,
+            '__assign(a, b)');
+
+        expect([...map]).toEqual([
+          ['a', true],
+          ['b', true],
+        ]);
+      });
+
+      it('should evaluate `__spread()`', () => {
+        const arr: number[] = evaluateExpression(
+            `
+              const a = [1];
+              const b = [2, 3];
+            `,
+            '__spread(a, b)');
+
+        expect(arr).toEqual([1, 2, 3]);
+      });
+
+      it('should evaluate `__spreadArrays()`', () => {
+        const arr: number[] = evaluateExpression(
+            `
+              const a = [4];
+              const b = [5, 6];
+            `,
+            '__spreadArrays(a, b)');
+
+        expect(arr).toEqual([4, 5, 6]);
+      });
     });
 
     describe('(visited file tracking)', () => {
       it('should track each time a source file is visited', () => {
-        const trackFileDependency = jasmine.createSpy('DependencyTracker');
+        const addDependency = jasmine.createSpy('DependencyTracker');
         const {expression, checker} = makeExpression(
             `class A { static foo = 42; } function bar() { return A.foo; }`, 'bar()');
-        const evaluator = makeEvaluator(checker, {trackFileDependency});
+        const evaluator = makeEvaluator(checker, {...fakeDepTracker, addDependency});
         evaluator.evaluate(expression);
-        expect(trackFileDependency).toHaveBeenCalledTimes(2);  // two declaration visited
-        expect(
-            trackFileDependency.calls.allArgs().map(args => [args[0].fileName, args[1].fileName]))
+        expect(addDependency).toHaveBeenCalledTimes(2);  // two declaration visited
+        expect(addDependency.calls.allArgs().map(args => [args[0].fileName, args[1].fileName]))
             .toEqual([[_('/entry.ts'), _('/entry.ts')], [_('/entry.ts'), _('/entry.ts')]]);
       });
 
       it('should track imported source files', () => {
-        const trackFileDependency = jasmine.createSpy('DependencyTracker');
+        const addDependency = jasmine.createSpy('DependencyTracker');
         const {expression, checker} =
             makeExpression(`import {Y} from './other'; const A = Y;`, 'A', [
               {name: _('/other.ts'), contents: `export const Y = 'test';`},
               {name: _('/not-visited.ts'), contents: `export const Z = 'nope';`}
             ]);
-        const evaluator = makeEvaluator(checker, {trackFileDependency});
+        const evaluator = makeEvaluator(checker, {...fakeDepTracker, addDependency});
         evaluator.evaluate(expression);
-        expect(trackFileDependency).toHaveBeenCalledTimes(2);
-        expect(
-            trackFileDependency.calls.allArgs().map(args => [args[0].fileName, args[1].fileName]))
+        expect(addDependency).toHaveBeenCalledTimes(2);
+        expect(addDependency.calls.allArgs().map(args => [args[0].fileName, args[1].fileName]))
             .toEqual([
               [_('/entry.ts'), _('/entry.ts')],
-              [_('/other.ts'), _('/entry.ts')],
+              [_('/entry.ts'), _('/other.ts')],
             ]);
       });
 
       it('should track files passed through during re-exports', () => {
-        const trackFileDependency = jasmine.createSpy('DependencyTracker');
+        const addDependency = jasmine.createSpy('DependencyTracker');
         const {expression, checker} =
             makeExpression(`import * as mod from './direct-reexport';`, 'mod.value.property', [
               {name: _('/const.ts'), contents: 'export const value = {property: "test"};'},
@@ -477,49 +790,76 @@ runInEachFileSystem(() => {
                 contents: `export {value} from './indirect-reexport';`
               },
             ]);
-        const evaluator = makeEvaluator(checker, {trackFileDependency});
+        const evaluator = makeEvaluator(checker, {...fakeDepTracker, addDependency});
         evaluator.evaluate(expression);
-        expect(trackFileDependency).toHaveBeenCalledTimes(2);
-        expect(
-            trackFileDependency.calls.allArgs().map(args => [args[0].fileName, args[1].fileName]))
+        expect(addDependency).toHaveBeenCalledTimes(2);
+        expect(addDependency.calls.allArgs().map(args => [args[0].fileName, args[1].fileName]))
             .toEqual([
-              [_('/direct-reexport.ts'), _('/entry.ts')],
+              [_('/entry.ts'), _('/direct-reexport.ts')],
               // Not '/indirect-reexport.ts' or '/def.ts'.
               // TS skips through them when finding the original symbol for `value`
-              [_('/const.ts'), _('/entry.ts')],
+              [_('/entry.ts'), _('/const.ts')],
             ]);
       });
     });
   });
 
   /**
-   * Customizes the resolution of functions to recognize functions from tslib. Such functions are
-   * not handled specially in the default TypeScript host, as only ngcc's ES5 host will have special
-   * powers to recognize functions from tslib.
+   * Customizes the resolution of module exports and identifier declarations to recognize known
+   * helper functions from `tslib`. Such functions are not handled specially in the default
+   * TypeScript host, as only ngcc's ES5 hosts will have special powers to recognize such functions.
    */
   class TsLibAwareReflectionHost extends TypeScriptReflectionHost {
-    getDefinitionOfFunction(node: ts.Node): FunctionDefinition|null {
-      if (ts.isFunctionDeclaration(node)) {
-        const helper = getTsHelperFn(node);
-        if (helper !== null) {
-          return {
-            node,
-            body: null, helper,
-            parameters: [],
-          };
-        }
+    getExportsOfModule(node: ts.Node): Map<string, Declaration>|null {
+      const map = super.getExportsOfModule(node);
+
+      if (map !== null) {
+        map.forEach(decl => decl.known = decl.known || (decl.node && getTsHelperFn(decl.node)));
       }
-      return super.getDefinitionOfFunction(node);
+
+      return map;
+    }
+
+    getDeclarationOfIdentifier(id: ts.Identifier): Declaration|null {
+      const superDeclaration = super.getDeclarationOfIdentifier(id);
+
+      if (superDeclaration === null || superDeclaration.node === null) {
+        return superDeclaration;
+      }
+
+      const tsHelperFn = getTsHelperFn(superDeclaration.node);
+      if (tsHelperFn !== null) {
+        return {
+          known: tsHelperFn,
+          node: id,
+          viaModule: null,
+        };
+      }
+
+      return superDeclaration;
     }
   }
 
-  function getTsHelperFn(node: ts.FunctionDeclaration): TsHelperFn|null {
-    const name = node.name !== undefined && ts.isIdentifier(node.name) && node.name.text;
+  function getTsHelperFn(node: ts.Declaration): KnownDeclaration|null {
+    const id = (node as ts.Declaration & {name?: ts.Identifier}).name || null;
+    const name = id && id.text;
 
-    if (name === '__spread') {
-      return TsHelperFn.Spread;
-    } else {
-      return null;
+    switch (name) {
+      case '__assign':
+        return KnownDeclaration.TsHelperAssign;
+      case '__spread':
+        return KnownDeclaration.TsHelperSpread;
+      case '__spreadArrays':
+        return KnownDeclaration.TsHelperSpreadArrays;
+      default:
+        return null;
     }
   }
 });
+
+const fakeDepTracker: DependencyTracker = {
+  addDependency: () => undefined,
+  addResourceDependency: () => undefined,
+  addTransitiveDependency: () => undefined,
+  addTransitiveResources: () => undefined,
+};

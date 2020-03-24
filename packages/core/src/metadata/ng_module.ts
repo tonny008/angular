@@ -12,7 +12,6 @@ import {Provider} from '../di/interface/provider';
 import {convertInjectableProviderToFactory} from '../di/util';
 import {Type} from '../interface/type';
 import {SchemaMetadata} from '../metadata/schema';
-import {NgModuleType} from '../render3';
 import {compileNgModule as render3CompileNgModule} from '../render3/jit/module';
 import {TypeDecorator, makeDecorator} from '../util/decorators';
 
@@ -85,6 +84,9 @@ export interface NgModuleDef<T> {
  *
  * @param T the module type. In Ivy applications, this must be explicitly
  * provided.
+ *
+ * Note that using ModuleWithProviders without a generic type is deprecated.
+ * The generic will become required in a future version of Angular.
  *
  * @publicApi
  */
@@ -265,6 +267,7 @@ export interface NgModule {
    * using one of the imperative techniques, such as `ViewContainerRef.createComponent()`.
    *
    * @see [Entry Components](guide/entry-components)
+   * @deprecated Since 9.0.0. With Ivy, this property is no longer necessary.
    */
   entryComponents?: Array<Type<any>|any[]>;
 
@@ -350,7 +353,7 @@ function preR3NgModuleCompile(moduleType: Type<any>, metadata?: NgModule): void 
     imports = [...imports, metadata.exports];
   }
 
-  (moduleType as InjectorType<any>).ngInjectorDef = ɵɵdefineInjector({
+  (moduleType as InjectorType<any>).ɵinj = ɵɵdefineInjector({
     factory: convertInjectableProviderToFactory(moduleType, {useClass: moduleType}),
     providers: metadata && metadata.providers,
     imports: imports,

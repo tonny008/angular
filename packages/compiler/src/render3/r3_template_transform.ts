@@ -18,10 +18,10 @@ import {PreparsedElementType, preparseElement} from '../template_parser/template
 import {syntaxError} from '../util';
 
 import * as t from './r3_ast';
-import {I18N_ICU_VAR_PREFIX} from './view/i18n/util';
+import {I18N_ICU_VAR_PREFIX, isI18nRootNode} from './view/i18n/util';
 
 const BIND_NAME_REGEXP =
-    /^(?:(?:(?:(bind-)|(let-)|(ref-|#)|(on-)|(bindon-)|(@))(.+))|\[\(([^\)]+)\)\]|\[([^\]]+)\]|\(([^\)]+)\))$/;
+    /^(?:(?:(?:(bind-)|(let-)|(ref-|#)|(on-)|(bindon-)|(@))(.*))|\[\(([^\)]+)\)\]|\[([^\]]+)\]|\(([^\)]+)\))$/;
 
 // Group 1 = "bind-"
 const KW_BIND_IDX = 1;
@@ -80,11 +80,21 @@ class HtmlAstToIvyAst implements html.Visitor {
   errors: ParseError[] = [];
   styles: string[] = [];
   styleUrls: string[] = [];
+  private inI18nBlock: boolean = false;
 
   constructor(private bindingParser: BindingParser) {}
 
   // HTML visitor
   visitElement(element: html.Element): t.Node|null {
+    const isI18nRootElement = isI18nRootNode(element.i18n);
+    if (isI18nRootElement) {
+      if (this.inI18nBlock) {
+        this.reportError(
+            'Cannot mark an element as translatable inside of a translatable section. Please remove the nested i18n marker.',
+            element.sourceSpan);
+      }
+      this.inI18nBlock = true;
+    }
     const preparsedElement = preparseElement(element);
     if (preparsedElement.type === PreparsedElementType.SCRIPT) {
       return null;
@@ -109,7 +119,7 @@ class HtmlAstToIvyAst implements html.Visitor {
     const variables: t.Variable[] = [];
     const references: t.Reference[] = [];
     const attributes: t.TextAttribute[] = [];
-    const i18nAttrsMeta: {[key: string]: i18n.AST} = {};
+    const i18nAttrsMeta: {[key: string]: i18n.I18nMeta} = {};
 
     const templateParsedProperties: ParsedProperty[] = [];
     const templateVariables: t.Variable[] = [];
@@ -141,13 +151,18 @@ class HtmlAstToIvyAst implements html.Visitor {
         const templateKey = normalizedName.substring(TEMPLATE_ATTR_PREFIX.length);
 
         const parsedVariables: ParsedVariable[] = [];
-        const absoluteOffset = attribute.valueSpan ? attribute.valueSpan.start.offset :
-                                                     attribute.sourceSpan.start.offset;
+        const absoluteValueOffset = attribute.valueSpan ?
+            attribute.valueSpan.start.offset :
+            // If there is no value span the attribute does not have a value, like `attr` in
+            //`<div attr></div>`. In this case, point to one character beyond the last character of
+            // the attribute name.
+            attribute.sourceSpan.start.offset + attribute.name.length;
+
         this.bindingParser.parseInlineTemplateBinding(
-            templateKey, templateValue, attribute.sourceSpan, absoluteOffset, [],
+            templateKey, templateValue, attribute.sourceSpan, absoluteValueOffset, [],
             templateParsedProperties, parsedVariables);
-        templateVariables.push(
-            ...parsedVariables.map(v => new t.Variable(v.name, v.value, v.sourceSpan)));
+        templateVariables.push(...parsedVariables.map(
+            v => new t.Variable(v.name, v.value, v.sourceSpan, v.valueSpan)));
       } else {
         // Check for variables, events, property bindings, interpolation
         hasBinding = this.parseAttribute(
@@ -205,12 +220,21 @@ class HtmlAstToIvyAst implements html.Visitor {
             outputs: parsedElement.outputs,
           } :
           {attributes: [], inputs: [], outputs: []};
+
+      // For <ng-template>s with structural directives on them, avoid passing i18n information to
+      // the wrapping template to prevent unnecessary i18n instructions from being generated. The
+      // necessary i18n meta information will be extracted from child elements.
+      const i18n = isTemplateElement && isI18nRootElement ? undefined : element.i18n;
+
       // TODO(pk): test for this case
       parsedElement = new t.Template(
           (parsedElement as t.Element).name, hoistedAttrs.attributes, hoistedAttrs.inputs,
           hoistedAttrs.outputs, templateAttrs, [parsedElement], [/* no references */],
           templateVariables, element.sourceSpan, element.startSourceSpan, element.endSourceSpan,
-          element.i18n);
+          i18n);
+    }
+    if (isI18nRootElement) {
+      this.inI18nBlock = false;
     }
     return parsedElement;
   }
@@ -225,19 +249,23 @@ class HtmlAstToIvyAst implements html.Visitor {
   }
 
   visitExpansion(expansion: html.Expansion): t.Icu|null {
-    const meta = expansion.i18n as i18n.Message;
-    // do not generate Icu in case it was created
-    // outside of i18n block in a template
-    if (!meta) {
+    if (!expansion.i18n) {
+      // do not generate Icu in case it was created
+      // outside of i18n block in a template
       return null;
     }
+    if (!isI18nRootNode(expansion.i18n)) {
+      throw new Error(
+          `Invalid type "${expansion.i18n.constructor}" for "i18n" property of ${expansion.sourceSpan.toString()}. Expected a "Message"`);
+    }
+    const message = expansion.i18n;
     const vars: {[name: string]: t.BoundText} = {};
     const placeholders: {[name: string]: t.Text | t.BoundText} = {};
     // extract VARs from ICUs - we process them separately while
     // assembling resulting message via goog.getMsg function, since
     // we need to pass them to top-level goog.getMsg call
-    Object.keys(meta.placeholders).forEach(key => {
-      const value = meta.placeholders[key];
+    Object.keys(message.placeholders).forEach(key => {
+      const value = message.placeholders[key];
       if (key.startsWith(I18N_ICU_VAR_PREFIX)) {
         const config = this.bindingParser.interpolationConfig;
         // ICU expression is a plain string, not wrapped into start
@@ -248,7 +276,7 @@ class HtmlAstToIvyAst implements html.Visitor {
         placeholders[key] = this._visitTextWithInterpolation(value, expansion.sourceSpan);
       }
     });
-    return new t.Icu(vars, placeholders, expansion.sourceSpan, meta);
+    return new t.Icu(vars, placeholders, expansion.sourceSpan, message);
   }
 
   visitExpansionCase(expansionCase: html.ExpansionCase): null { return null; }
@@ -257,7 +285,8 @@ class HtmlAstToIvyAst implements html.Visitor {
 
   // convert view engine `ParsedProperty` to a format suitable for IVY
   private extractAttributes(
-      elementName: string, properties: ParsedProperty[], i18nPropsMeta: {[key: string]: i18n.AST}):
+      elementName: string, properties: ParsedProperty[],
+      i18nPropsMeta: {[key: string]: i18n.I18nMeta}):
       {bound: t.BoundAttribute[], literal: t.TextAttribute[]} {
     const bound: t.BoundAttribute[] = [];
     const literal: t.TextAttribute[] = [];
@@ -297,20 +326,20 @@ class HtmlAstToIvyAst implements html.Visitor {
       hasBinding = true;
       if (bindParts[KW_BIND_IDX] != null) {
         this.bindingParser.parsePropertyBinding(
-            bindParts[IDENT_KW_IDX], value, false, srcSpan, absoluteOffset, matchableAttributes,
-            parsedProperties);
+            bindParts[IDENT_KW_IDX], value, false, srcSpan, absoluteOffset, attribute.valueSpan,
+            matchableAttributes, parsedProperties);
 
       } else if (bindParts[KW_LET_IDX]) {
         if (isTemplateElement) {
           const identifier = bindParts[IDENT_KW_IDX];
-          this.parseVariable(identifier, value, srcSpan, variables);
+          this.parseVariable(identifier, value, srcSpan, attribute.valueSpan, variables);
         } else {
           this.reportError(`"let-" is only supported on ng-template elements.`, srcSpan);
         }
 
       } else if (bindParts[KW_REF_IDX]) {
         const identifier = bindParts[IDENT_KW_IDX];
-        this.parseReference(identifier, value, srcSpan, references);
+        this.parseReference(identifier, value, srcSpan, attribute.valueSpan, references);
 
       } else if (bindParts[KW_ON_IDX]) {
         const events: ParsedEvent[] = [];
@@ -320,19 +349,20 @@ class HtmlAstToIvyAst implements html.Visitor {
         addEvents(events, boundEvents);
       } else if (bindParts[KW_BINDON_IDX]) {
         this.bindingParser.parsePropertyBinding(
-            bindParts[IDENT_KW_IDX], value, false, srcSpan, absoluteOffset, matchableAttributes,
-            parsedProperties);
+            bindParts[IDENT_KW_IDX], value, false, srcSpan, absoluteOffset, attribute.valueSpan,
+            matchableAttributes, parsedProperties);
         this.parseAssignmentEvent(
             bindParts[IDENT_KW_IDX], value, srcSpan, attribute.valueSpan, matchableAttributes,
             boundEvents);
       } else if (bindParts[KW_AT_IDX]) {
         this.bindingParser.parseLiteralAttr(
-            name, value, srcSpan, absoluteOffset, matchableAttributes, parsedProperties);
+            name, value, srcSpan, absoluteOffset, attribute.valueSpan, matchableAttributes,
+            parsedProperties);
 
       } else if (bindParts[IDENT_BANANA_BOX_IDX]) {
         this.bindingParser.parsePropertyBinding(
             bindParts[IDENT_BANANA_BOX_IDX], value, false, srcSpan, absoluteOffset,
-            matchableAttributes, parsedProperties);
+            attribute.valueSpan, matchableAttributes, parsedProperties);
         this.parseAssignmentEvent(
             bindParts[IDENT_BANANA_BOX_IDX], value, srcSpan, attribute.valueSpan,
             matchableAttributes, boundEvents);
@@ -340,7 +370,7 @@ class HtmlAstToIvyAst implements html.Visitor {
       } else if (bindParts[IDENT_PROPERTY_IDX]) {
         this.bindingParser.parsePropertyBinding(
             bindParts[IDENT_PROPERTY_IDX], value, false, srcSpan, absoluteOffset,
-            matchableAttributes, parsedProperties);
+            attribute.valueSpan, matchableAttributes, parsedProperties);
 
       } else if (bindParts[IDENT_EVENT_IDX]) {
         const events: ParsedEvent[] = [];
@@ -351,34 +381,41 @@ class HtmlAstToIvyAst implements html.Visitor {
       }
     } else {
       hasBinding = this.bindingParser.parsePropertyInterpolation(
-          name, value, srcSpan, matchableAttributes, parsedProperties);
+          name, value, srcSpan, attribute.valueSpan, matchableAttributes, parsedProperties);
     }
 
     return hasBinding;
   }
 
-  private _visitTextWithInterpolation(value: string, sourceSpan: ParseSourceSpan, i18n?: i18n.AST):
-      t.Text|t.BoundText {
+  private _visitTextWithInterpolation(
+      value: string, sourceSpan: ParseSourceSpan, i18n?: i18n.I18nMeta): t.Text|t.BoundText {
     const valueNoNgsp = replaceNgsp(value);
     const expr = this.bindingParser.parseInterpolation(valueNoNgsp, sourceSpan);
     return expr ? new t.BoundText(expr, sourceSpan, i18n) : new t.Text(valueNoNgsp, sourceSpan);
   }
 
   private parseVariable(
-      identifier: string, value: string, sourceSpan: ParseSourceSpan, variables: t.Variable[]) {
+      identifier: string, value: string, sourceSpan: ParseSourceSpan,
+      valueSpan: ParseSourceSpan|undefined, variables: t.Variable[]) {
     if (identifier.indexOf('-') > -1) {
       this.reportError(`"-" is not allowed in variable names`, sourceSpan);
+    } else if (identifier.length === 0) {
+      this.reportError(`Variable does not have a name`, sourceSpan);
     }
-    variables.push(new t.Variable(identifier, value, sourceSpan));
+
+    variables.push(new t.Variable(identifier, value, sourceSpan, valueSpan));
   }
 
   private parseReference(
-      identifier: string, value: string, sourceSpan: ParseSourceSpan, references: t.Reference[]) {
+      identifier: string, value: string, sourceSpan: ParseSourceSpan,
+      valueSpan: ParseSourceSpan|undefined, references: t.Reference[]) {
     if (identifier.indexOf('-') > -1) {
       this.reportError(`"-" is not allowed in reference names`, sourceSpan);
+    } else if (identifier.length === 0) {
+      this.reportError(`Reference does not have a name`, sourceSpan);
     }
 
-    references.push(new t.Reference(identifier, value, sourceSpan));
+    references.push(new t.Reference(identifier, value, sourceSpan, valueSpan));
   }
 
   private parseAssignmentEvent(
